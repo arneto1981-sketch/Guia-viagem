@@ -173,13 +173,14 @@ footer{font-size:12px;color:var(--muted);padding-bottom:8px}
     <label class="setting"><span>Diário: detectar paradas automaticamente</span><input type="checkbox" id="setDiaryAuto" checked></label>
     <label class="setting"><span>Buscar nome do lugar na internet (OpenStreetMap)</span><input type="checkbox" id="setGeocode" checked></label>
     <label class="setting"><span>Chave da API Claude (fica só neste aparelho; usada em "O que é isto?")</span><input type="password" id="setKey" placeholder="sk-ant-…" autocomplete="off"></label>
-    <label class="setting"><span>Modelo</span><input type="text" id="setModel" placeholder="claude-sonnet-4-5"></label>
+    <label class="setting"><span>Modelo</span><input type="text" id="setModel" placeholder="claude-sonnet-5-5"></label>
   </div>
   <div class="grid">
     <button id="btnPlan">Importar roteiro (JSON)</button>
     <button id="btnPlanDel">Remover roteiro</button>
     <button id="btnPlanUndoAuto">Reabrir itens marcados automaticamente</button>
     <button id="btnTestVoice">Testar voz</button>
+    <button id="btnTestKey">Testar chave da API</button>
     <button id="btnResetDone">Zerar "já narrados"</button>
     <button id="btnBackup">Backup completo (JSON)</button>
     <button id="btnRestore">Restaurar backup</button>
@@ -195,9 +196,9 @@ footer{font-size:12px;color:var(--muted);padding-bottom:8px}
 (function(){
 'use strict';
 const $=s=>document.querySelector(s), $$=s=>Array.from(document.querySelectorAll(s));
-const VERSION='2.5';
+const VERSION='2.6';
 const S={pois:[],pos:null,watch:null,speaking:false,last:null,active:false,wake:null,done:new Map(),
-         settings:{auto:true,raio:0,rate:1,voice:'',rep:6,stay:12,diaryAuto:true,geocode:true,model:'claude-sonnet-4-5'},
+         settings:{auto:true,raio:0,rate:1,voice:'',rep:6,stay:12,diaryAuto:true,geocode:true,model:'claude-sonnet-5-5'},
          diary:[],track:[],cand:null,open:null,away:null,day:null,geoCache:{},plan:null,photos:[],apiKey:'',route:null,lastGuide:{t:0,d:1e9},heading:null};
 
 /* ---------- utilidades ---------- */
@@ -221,7 +222,7 @@ function download(name,content,type){ const a=document.createElement('a'); a.hre
 async function shareOrDownload(name,content,type,title){ if(navigator.share){ try{ const f=new File([content],name,{type}); if(navigator.canShare&&navigator.canShare({files:[f]})){ await navigator.share({title,files:[f]}); return; } }catch(e){ if(e.name==='AbortError') return; } } download(name,content,type); }
 
 /* ---------- estado persistido ---------- */
-Object.assign(S.settings, load('guia.settings',{}));
+Object.assign(S.settings, load('guia.settings',{})); if(!S.settings.model||/^claude-sonnet-4/.test(S.settings.model)) S.settings.model='claude-sonnet-5-5';
 S.diary=load('guia.diary',[]); S.track=load('guia.track',[]); S.geoCache=load('guia.geocache',{}); S.plan=load('guia.plan',null);
 try{ S.apiKey=localStorage.getItem('guia.apikey')||''; }catch(e){}
 (function(){ const d=load('guia.done',{}); Object.entries(d).forEach(([k,t])=>S.done.set(k,t)); })();
@@ -404,7 +405,7 @@ async function identifyPhoto(ph){
   const b64=ph.data.split(',')[1];
   try{
     const r=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'content-type':'application/json','x-api-key':S.apiKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
-      body:JSON.stringify({model:S.settings.model||'claude-sonnet-4-5',max_tokens:600,messages:[{role:'user',content:[{type:'image',source:{type:'base64',media_type:'image/jpeg',data:b64}},{type:'text',text:prompt}]}]})});
+      body:JSON.stringify({model:S.settings.model||'claude-sonnet-5-5',max_tokens:600,messages:[{role:'user',content:[{type:'image',source:{type:'base64',media_type:'image/jpeg',data:b64}},{type:'text',text:prompt}]}]})});
     const j=await r.json();
     if(!r.ok){ throw new Error((j.error&&j.error.message)||('HTTP '+r.status)); }
     const text=(j.content||[]).filter(c=>c.type==='text').map(c=>c.text).join('\n').trim();
@@ -689,9 +690,13 @@ function bindSettings(){
   $('#setAuto').checked=s.auto; $('#setRaio').value=s.raio; $('#setRate').value=s.rate; $('#setRep').value=s.rep; $('#setStay').value=s.stay; $('#setDiaryAuto').checked=s.diaryAuto; $('#setGeocode').checked=s.geocode; $('#setModel').value=s.model||''; $('#setKey').value=S.apiKey;
   const lbl=()=>{ $('#lblRaio').textContent='+'+s.raio+' m'; $('#lblRate').textContent=s.rate.toFixed(1)+'×'; $('#lblRep').textContent=s.rep+' h'; $('#lblStay').textContent=s.stay+' min'; };
   lbl();
-  const upd=()=>{ s.auto=$('#setAuto').checked; s.raio=+$('#setRaio').value; s.rate=+$('#setRate').value; s.rep=+$('#setRep').value; s.stay=+$('#setStay').value; s.diaryAuto=$('#setDiaryAuto').checked; s.geocode=$('#setGeocode').checked; s.voice=$('#setVoice').value; s.model=$('#setModel').value.trim()||'claude-sonnet-4-5'; store('guia.settings',s); lbl(); pickVoice(); };
+  const upd=()=>{ s.auto=$('#setAuto').checked; s.raio=+$('#setRaio').value; s.rate=+$('#setRate').value; s.rep=+$('#setRep').value; s.stay=+$('#setStay').value; s.diaryAuto=$('#setDiaryAuto').checked; s.geocode=$('#setGeocode').checked; s.voice=$('#setVoice').value; s.model=$('#setModel').value.trim()||'claude-sonnet-5-5'; store('guia.settings',s); lbl(); pickVoice(); };
   ['#setAuto','#setRaio','#setRate','#setRep','#setStay','#setDiaryAuto','#setGeocode','#setVoice','#setModel'].forEach(id=>$(id).addEventListener('input',upd));
   $('#setKey').addEventListener('input',()=>{ S.apiKey=$('#setKey').value.trim(); try{ localStorage.setItem('guia.apikey',S.apiKey); }catch(e){} });
+  $('#btnTestKey').onclick=async()=>{ if(!S.apiKey){ toast('Cole a chave primeiro.'); return; } const b=$('#btnTestKey'); b.disabled=true; b.textContent='Testando…';
+    try{ const r=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'content-type':'application/json','x-api-key':S.apiKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},body:JSON.stringify({model:S.settings.model||'claude-sonnet-5-5',max_tokens:20,messages:[{role:'user',content:'Responda só: OK'}]})});
+      const j=await r.json(); if(!r.ok) throw new Error((j.error&&j.error.message)||('HTTP '+r.status)); const t=(j.content||[]).map(c=>c.text||'').join('').trim(); toast('Chave OK · modelo '+(j.model||S.settings.model)+' · resposta: '+t); say('Chave da API funcionando.'); }
+    catch(e){ toast('Falhou: '+e.message); } b.disabled=false; b.textContent='Testar chave da API'; };
   $('#btnTestVoice').onclick=()=>say('Teste de voz. Você está ouvindo o Guia de Bolso na velocidade '+s.rate.toFixed(1)+'.');
   $('#btnResetDone').onclick=()=>{ S.done.clear(); saveDone(); refreshCounts(); toast('Lista de narrados zerada.'); };
   $('#btnBackup').onclick=async()=>{ const data={version:VERSION,exported:new Date().toISOString(),diary:S.diary,track:S.track,plan:S.plan,photos:S.photos}; shareOrDownload('guia-backup-'+dayKey(Date.now())+'.json',JSON.stringify(data),'application/json','Backup do Guia'); };
