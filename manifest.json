@@ -1,0 +1,16 @@
+{
+  "name": "Guia de Bolso",
+  "short_name": "Guia",
+  "description": "Guia turístico por GPS com narração em português e diário de viagem automático",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#14213d",
+  "theme_color": "#14213d",
+  "lang": "pt-BR",
+  "icons": [
+    { "src": "icon.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icon-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

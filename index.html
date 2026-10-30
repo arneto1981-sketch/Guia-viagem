@@ -1,0 +1,677 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#14213d">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.png">
+<link rel="apple-touch-icon" href="icon.png">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<title>Guia de Bolso</title>
+<style>
+/* App de uma tela com 3 abas (Guia · Diário · Ajustes); status fixo no topo; botões grandes para uso com uma mão */
+:root{
+  --bg:#14213d; --panel:#1d2b4f; --panel-2:#27396a; --fg:#f3f0e8; --muted:#aab4cc; --line:#35497a;
+  --accent:#f2b134; --accent-fg:#1a1a1a; --ok:#58c28a; --warn:#f29b4f; --bad:#ef6f6c;
+  --font:Roboto,"Segoe UI",system-ui,-apple-system,sans-serif;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.45 var(--font);
+  padding-left:max(14px,env(safe-area-inset-left,0px));padding-right:max(14px,env(safe-area-inset-right,0px));
+  padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);
+  display:flex;flex-direction:column;gap:10px;min-height:100%}
+header{display:flex;align-items:center;justify-content:space-between;gap:10px;padding-block:10px 0}
+h1{font-size:19px;margin:0;letter-spacing:.2px;white-space:nowrap}
+h1 small{font-weight:400;color:var(--muted);font-size:13px;margin-left:6px}
+#gps{font-size:12.5px;color:var(--muted);font-variant-numeric:tabular-nums;text-align:right}
+#gps.ok{color:var(--ok)} #gps.bad{color:var(--warn)}
+nav{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:6px}
+nav button{min-height:44px;padding:10px;font-size:15px;background:var(--panel);border-radius:12px}
+nav button[aria-selected="true"]{background:var(--accent);color:var(--accent-fg)}
+.tab{display:none;flex-direction:column;gap:10px;flex:1;min-height:0}
+.tab.active{display:flex}
+.panel{background:var(--panel);border-radius:14px;padding:14px 16px;min-width:0}
+.scroll{flex:1;overflow:auto;-webkit-overflow-scrolling:touch;min-height:140px}
+.eyebrow{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+#now h2{margin:4px 0 8px;font-size:22px;line-height:1.2;text-wrap:balance}
+#now p{margin:0 0 10px;font-size:17px;line-height:1.5}
+#now .dica{border-left:3px solid var(--accent);padding-left:10px}
+#now .mais{font-size:15.5px;color:#e6e2d8;border-top:1px solid var(--line);padding-top:10px;white-space:pre-line}
+.meta{font-size:13px;color:var(--muted);font-variant-numeric:tabular-nums}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+button{font:inherit;border:0;border-radius:14px;padding:14px 12px;background:var(--panel-2);color:var(--fg);
+  font-size:16px;font-weight:600;min-height:56px;touch-action:manipulation;cursor:pointer}
+button:active{filter:brightness(1.15)}
+button:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+button.primary{background:var(--accent);color:var(--accent-fg)}
+button.full{grid-column:1/-1}
+button.small{min-height:36px;padding:6px 12px;font-size:14px;border-radius:10px;font-weight:500}
+button[disabled]{opacity:.5}
+.list .row{display:flex;justify-content:space-between;gap:10px;padding:10px 0;border-top:1px solid var(--line);align-items:center}
+.list .row:first-child{border-top:0}
+.row b{display:block;font-size:16px}
+.row span{color:var(--muted);font-size:13px;font-variant-numeric:tabular-nums}
+.row.done b{color:var(--muted);font-weight:500}
+.entry{border-top:1px solid var(--line);padding:12px 0;display:flex;flex-direction:column;gap:8px}
+.entry:first-child{border-top:0}
+.entry .top{display:flex;justify-content:space-between;gap:8px;align-items:baseline}
+.entry .time{font-variant-numeric:tabular-nums;color:var(--muted);font-size:13px;white-space:nowrap}
+.entry .place{font-size:17px;font-weight:600}
+.entry.plan{background:rgba(242,177,52,.06);margin:0 -16px;padding:12px 16px;border-left:3px solid var(--accent)}
+.entry.plan.feito{border-left-color:var(--ok);background:rgba(88,194,138,.06)}
+.entry.plan.pulado{border-left-color:var(--line);opacity:.6}
+.entry .det{font-size:14px;color:#d9d5cb;white-space:pre-line}
+.entry img{max-width:100%;border-radius:10px;max-height:260px;object-fit:cover}
+.entry .ai{font-size:15px;border-left:3px solid var(--ok);padding-left:10px;white-space:pre-line}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{border:1px solid var(--line);background:transparent;color:var(--fg);border-radius:999px;padding:6px 10px;min-height:0;font-size:13px;font-weight:500}
+.chip[aria-pressed="true"]{background:var(--accent);color:var(--accent-fg);border-color:var(--accent)}
+.chip.ok{border-color:var(--ok);color:var(--ok)}
+textarea,input[type=text],input[type=time],input[type=password],input[type=range],select{font:inherit;color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:8px 10px;width:100%}
+textarea{min-height:52px;resize:vertical}
+.editform{display:flex;flex-direction:column;gap:6px}
+.editform .r{display:flex;gap:6px}
+.editform input[type=time]{width:120px}
+label.setting{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:10px 0;border-top:1px solid var(--line)}
+label.setting:first-child{border-top:0}
+label.setting span{flex:1}
+label.setting input[type=range]{width:46%}
+label.setting input[type=checkbox]{width:22px;height:22px}
+label.setting input[type=password],label.setting input[type=text]{width:55%}
+.pill{display:inline-block;padding:2px 8px;border-radius:999px;background:var(--panel-2);font-size:12px;margin-right:6px;margin-bottom:4px}
+footer{font-size:12px;color:var(--muted);padding-bottom:8px}
+.toast{position:fixed;left:50%;bottom:calc(16px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--fg);color:var(--bg);padding:10px 14px;border-radius:12px;font-size:14px;opacity:0;pointer-events:none;transition:opacity .2s;max-width:90vw;z-index:9}
+.toast.show{opacity:1}
+#map{flex:1;min-height:300px;border-radius:14px;background:#0e1830}
+.leaflet-popup-content{font:14px/1.4 var(--font);color:#1a1a1a}.leaflet-popup-content b{font-size:15px}.leaflet-popup-content button{min-height:32px;padding:4px 10px;font-size:13px;border-radius:8px;margin-top:6px;background:#f2b134;color:#1a1a1a}
+.leaflet-container{font:12px var(--font)}
+.daysel{display:flex;gap:6px;overflow:auto;padding-bottom:4px}
+.daysel button{min-height:36px;padding:6px 12px;font-size:14px;white-space:nowrap;border-radius:999px;background:var(--panel-2)}
+.daysel button[aria-selected="true"]{background:var(--accent);color:var(--accent-fg)}
+@media (prefers-reduced-motion:reduce){ .toast{transition:none} }
+</style>
+</head>
+<body>
+<header>
+  <h1>Guia de Bolso <small id="cidade">—</small></h1>
+  <div id="gps">GPS desligado</div>
+</header>
+
+<nav role="tablist">
+  <button role="tab" aria-selected="true" data-tab="guia">Guia</button>
+  <button role="tab" aria-selected="false" data-tab="mapa">Mapa</button>
+  <button role="tab" aria-selected="false" data-tab="diario">Diário</button>
+  <button role="tab" aria-selected="false" data-tab="ajustes">Ajustes</button>
+</nav>
+
+<!-- ===================== GUIA ===================== -->
+<section class="tab active" id="tab-guia">
+  <div class="panel scroll" id="now" aria-live="polite">
+    <div class="eyebrow">Pronto</div>
+    <h2>Fone no ouvido e toque em Iniciar</h2>
+    <p>Andando, ao entrar no raio de um ponto eu narro no fone. Mantenha o app aberto na tela (ele segura a tela acesa).</p>
+    <p class="meta" id="stats">carregando pontos…</p>
+  </div>
+  <div class="panel list" id="list" hidden></div>
+  <div class="grid">
+    <button class="primary full" id="btnStart">Iniciar guia</button>
+    <button id="btnRoute">Rota do dia</button>
+    <button id="btnNear">O que tem perto</button>
+    <button id="btnRefresh">Atualizar localização</button>
+    <button id="btnRepeat">Repetir</button>
+    <button id="btnDay">Briefing do dia</button>
+    <button id="btnPhoto">📷 Foto do lugar</button>
+    <button id="btnStop">Parar</button>
+    <button id="btnSkip" hidden>Pular ponto da rota</button>
+    <button id="btnMaps" hidden>Abrir rota no Maps</button>
+    <input type="file" id="filePhoto" accept="image/*" capture="environment" hidden>
+  </div>
+</section>
+
+<!-- ===================== MAPA ===================== -->
+<section class="tab" id="tab-mapa">
+  <div id="map"></div>
+  <div class="grid">
+    <button class="primary" id="btnMapMe">Centralizar em mim</button>
+    <button id="btnMapRoute">Ver rota do dia</button>
+  </div>
+</section>
+
+<!-- ===================== DIÁRIO ===================== -->
+<section class="tab" id="tab-diario">
+  <div class="daysel" id="daysel"></div>
+  <div class="panel scroll" id="diary"></div>
+  <div class="grid">
+    <button class="primary" id="btnLog">Registrar agora</button>
+    <button id="btnPhoto2">📷 Foto</button>
+    <button id="btnExport">Exportar dia (texto)</button>
+    <button id="btnPlaybook">Playbook (HTML c/ fotos)</button>
+  </div>
+</section>
+
+<!-- ===================== AJUSTES ===================== -->
+<section class="tab" id="tab-ajustes">
+  <div class="panel scroll">
+    <label class="setting"><span>Narrar automaticamente ao entrar no raio</span><input type="checkbox" id="setAuto" checked></label>
+    <label class="setting"><span>Raio extra de disparo <b id="lblRaio">+0 m</b></span><input type="range" id="setRaio" min="0" max="80" step="10" value="0"></label>
+    <label class="setting"><span>Velocidade da voz <b id="lblRate">1.0×</b></span><input type="range" id="setRate" min="0.8" max="1.4" step="0.1" value="1"></label>
+    <label class="setting"><span>Voz</span><select id="setVoice"></select></label>
+    <label class="setting"><span>Não repetir um ponto por <b id="lblRep">6 h</b></span><input type="range" id="setRep" min="1" max="48" step="1" value="6"></label>
+    <label class="setting"><span>Diário: registrar parada a partir de <b id="lblStay">12 min</b></span><input type="range" id="setStay" min="3" max="30" step="1" value="12"></label>
+    <label class="setting"><span>Diário: detectar paradas automaticamente</span><input type="checkbox" id="setDiaryAuto" checked></label>
+    <label class="setting"><span>Buscar nome do lugar na internet (OpenStreetMap)</span><input type="checkbox" id="setGeocode" checked></label>
+    <label class="setting"><span>Chave da API Claude (fica só neste aparelho; usada em "O que é isto?")</span><input type="password" id="setKey" placeholder="sk-ant-…" autocomplete="off"></label>
+    <label class="setting"><span>Modelo</span><input type="text" id="setModel" placeholder="claude-sonnet-4-5"></label>
+  </div>
+  <div class="grid">
+    <button id="btnPlan">Importar roteiro (JSON)</button>
+    <button id="btnPlanDel">Remover roteiro</button>
+    <button id="btnTestVoice">Testar voz</button>
+    <button id="btnResetDone">Zerar "já narrados"</button>
+    <button id="btnBackup">Backup completo (JSON)</button>
+    <button id="btnRestore">Restaurar backup</button>
+    <input type="file" id="fileRestore" accept="application/json" hidden>
+    <input type="file" id="filePlan" accept="application/json" hidden>
+  </div>
+  <footer><span class="pill" id="voice">voz: —</span><span class="pill" id="count">0 pontos</span><span class="pill" id="done">0 narrados</span><span class="pill" id="planinfo">sem roteiro</span><span class="pill" id="ver">v2</span></footer>
+</section>
+
+<div class="toast" id="toast"></div>
+
+<script>
+(function(){
+'use strict';
+const $=s=>document.querySelector(s), $$=s=>Array.from(document.querySelectorAll(s));
+const VERSION='2.3';
+const S={pois:[],pos:null,watch:null,speaking:false,last:null,active:false,wake:null,done:new Map(),
+         settings:{auto:true,raio:0,rate:1,voice:'',rep:6,stay:12,diaryAuto:true,geocode:true,model:'claude-sonnet-4-5'},
+         diary:[],track:[],cand:null,open:null,away:null,day:null,geoCache:{},plan:null,photos:[],apiKey:'',route:null,lastGuide:{t:0,d:1e9}};
+
+/* ---------- utilidades ---------- */
+const esc=s=>String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const R=6371000, rad=x=>x*Math.PI/180;
+function dist(a,b){ const dLat=rad(b.lat-a.lat), dLon=rad(b.lon-a.lon); const s=Math.sin(dLat/2)**2+Math.cos(rad(a.lat))*Math.cos(rad(b.lat))*Math.sin(dLon/2)**2; return 2*R*Math.asin(Math.sqrt(s)); }
+function bearing(a,b){ const y=Math.sin(rad(b.lon-a.lon))*Math.cos(rad(b.lat)); const x=Math.cos(rad(a.lat))*Math.sin(rad(b.lat))-Math.sin(rad(a.lat))*Math.cos(rad(b.lat))*Math.cos(rad(b.lon-a.lon)); return (Math.atan2(y,x)*180/Math.PI+360)%360; }
+const PONTOS=['norte','nordeste','leste','sudeste','sul','sudoeste','oeste','noroeste'];
+const card=b=>PONTOS[Math.round(b/45)%8];
+const pad=n=>String(n).padStart(2,'0');
+const hm=t=>{const d=new Date(t);return pad(d.getHours())+':'+pad(d.getMinutes());};
+const dayKey=t=>{const d=new Date(t);return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate());};
+const dayLabel=k=>{const [y,m,d]=k.split('-');const dt=new Date(+y,+m-1,+d);return ['dom','seg','ter','qua','qui','sex','sáb'][dt.getDay()]+' '+d+'/'+m;};
+const mins=ms=>Math.round(ms/60000);
+const fmtDur=ms=>{const m=mins(ms);return m<60?m+' min':Math.floor(m/60)+'h'+(m%60?pad(m%60):'');};
+const poiRaio=p=>p.raio||p.raio_m||40, poiTipo=p=>p.tipo||p.categoria||'';
+let toastT; function toast(msg){ const t=$('#toast'); t.textContent=msg; t.classList.add('show'); clearTimeout(toastT); toastT=setTimeout(()=>t.classList.remove('show'),2800); }
+function store(k,v){ try{ localStorage.setItem(k,JSON.stringify(v)); }catch(e){ toast('Sem espaço para salvar.'); } }
+function load(k,d){ try{ const v=localStorage.getItem(k); return v?JSON.parse(v):d; }catch(e){ return d; } }
+function download(name,content,type){ const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([content],{type})); a.download=name; document.body.appendChild(a); a.click(); setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},2000); }
+async function shareOrDownload(name,content,type,title){ if(navigator.share){ try{ const f=new File([content],name,{type}); if(navigator.canShare&&navigator.canShare({files:[f]})){ await navigator.share({title,files:[f]}); return; } }catch(e){ if(e.name==='AbortError') return; } } download(name,content,type); }
+
+/* ---------- estado persistido ---------- */
+Object.assign(S.settings, load('guia.settings',{}));
+S.diary=load('guia.diary',[]); S.track=load('guia.track',[]); S.geoCache=load('guia.geocache',{}); S.plan=load('guia.plan',null);
+try{ S.apiKey=localStorage.getItem('guia.apikey')||''; }catch(e){}
+(function(){ const d=load('guia.done',{}); Object.entries(d).forEach(([k,t])=>S.done.set(k,t)); })();
+function saveDone(){ const o={}; S.done.forEach((t,k)=>o[k]=t); store('guia.done',o); }
+function saveDiary(){ store('guia.diary',S.diary); }
+function savePlan(){ store('guia.plan',S.plan); refreshCounts(); }
+function saveTrack(){ if(S.track.length>6000) S.track=S.track.slice(-5000); store('guia.track',S.track); }
+function notNarratedRecently(id){ const t=S.done.get(id); return !t || (Date.now()-t)>S.settings.rep*3600e3; }
+
+/* ---------- fotos (IndexedDB: localStorage é pequeno demais) ---------- */
+const DB={db:null,
+  open(){ return new Promise((res,rej)=>{ if(this.db) return res(this.db); const r=indexedDB.open('guia',1); r.onupgradeneeded=()=>{ r.result.createObjectStore('photos',{keyPath:'id'}); }; r.onsuccess=()=>{ this.db=r.result; res(this.db); }; r.onerror=()=>rej(r.error); }); },
+  async all(){ const db=await this.open(); return new Promise((res,rej)=>{ const q=db.transaction('photos').objectStore('photos').getAll(); q.onsuccess=()=>res(q.result||[]); q.onerror=()=>rej(q.error); }); },
+  async put(p){ const db=await this.open(); return new Promise((res,rej)=>{ const t=db.transaction('photos','readwrite'); t.objectStore('photos').put(p); t.oncomplete=res; t.onerror=()=>rej(t.error); }); },
+  async del(id){ const db=await this.open(); return new Promise((res,rej)=>{ const t=db.transaction('photos','readwrite'); t.objectStore('photos').delete(id); t.oncomplete=res; t.onerror=()=>rej(t.error); }); }
+};
+async function loadPhotos(){ try{ S.photos=await DB.all(); }catch(e){ S.photos=[]; } }
+function resizeImage(file,max){ return new Promise((res,rej)=>{ const img=new Image(); const url=URL.createObjectURL(file); img.onload=()=>{ const k=Math.min(1,max/Math.max(img.width,img.height)); const c=document.createElement('canvas'); c.width=Math.round(img.width*k); c.height=Math.round(img.height*k); c.getContext('2d').drawImage(img,0,0,c.width,c.height); URL.revokeObjectURL(url); res(c.toDataURL('image/jpeg',0.8)); }; img.onerror=rej; img.src=url; }); }
+
+/* ---------- abas ---------- */
+$$('nav [role=tab]').forEach(b=>b.onclick=()=>{ $$('nav [role=tab]').forEach(x=>x.setAttribute('aria-selected',x===b)); $$('.tab').forEach(t=>t.classList.toggle('active',t.id==='tab-'+b.dataset.tab)); if(b.dataset.tab==='diario') renderDiary(); if(b.dataset.tab==='mapa') showMap(); });
+
+/* ---------- dados ---------- */
+fetch('pois.json',{cache:'no-cache'}).then(r=>r.json()).then(d=>{ S.pois=(d.pois||d).filter(p=>isFinite(p.lat)&&isFinite(p.lon)); refreshCounts(); $('#stats').textContent=S.pois.length+' pontos carregados · '+[...new Set(S.pois.map(p=>p.cidade))].join(', '); }).catch(()=>{ $('#stats').textContent='Não consegui carregar pois.json'; });
+function refreshCounts(){ $('#count').textContent=S.pois.length+' pontos'; $('#done').textContent=S.done.size+' narrados'; $('#ver').textContent='v'+VERSION; $('#planinfo').textContent=S.plan?('roteiro: '+S.plan.itens.length+' itens'):'sem roteiro'; }
+function nearby(limit,from){ const o=from||S.pos; if(!o) return []; return S.pois.map(p=>({p,d:dist(o,p),b:bearing(o,p)})).filter(x=>x.d<=limit).sort((a,b)=>a.d-b.d); }
+function cityOf(pos){ const n=nearby(40000,pos); if(n.length) return n[0].p.cidade; if(S.plan){ const h=S.plan.hoteis.map(h=>({h,d:dist(pos,h)})).sort((a,b)=>a.d-b.d)[0]; if(h&&h.d<40000) return h.h.cidade; } return null; }
+function nearestHotel(pos){ if(!S.plan) return null; for(const h of S.plan.hoteis){ if(dist(pos,h)<=(h.raio||60)) return h; } return null; }
+
+/* ---------- voz ---------- */
+let voices=[], voice=null, watchdog=null;
+function pickVoice(){
+  voices=speechSynthesis.getVoices().filter(v=>/^pt/i.test(v.lang));
+  const sel=$('#setVoice'); sel.innerHTML=voices.map(v=>'<option value="'+esc(v.name)+'">'+esc(v.name)+' ('+v.lang+')</option>').join('')||'<option value="">padrão do sistema</option>';
+  voice=voices.find(v=>v.name===S.settings.voice)||voices.find(v=>/pt[-_]BR/i.test(v.lang)&&/Google|natural|Luciana|Francisca/i.test(v.name))||voices.find(v=>/pt[-_]BR/i.test(v.lang))||voices[0]||null;
+  if(voice) sel.value=voice.name; $('#voice').textContent='voz: '+(voice?voice.name.replace(/Google\s*/i,'Google '):'padrão');
+}
+if('speechSynthesis' in window){ speechSynthesis.onvoiceschanged=pickVoice; pickVoice(); }
+function say(text,onend){
+  if(!('speechSynthesis' in window)){ if(onend) onend(); return; }
+  try{
+    speechSynthesis.cancel(); clearTimeout(watchdog);
+    const u=new SpeechSynthesisUtterance(text); u.lang='pt-BR'; if(voice) u.voice=voice; u.rate=S.settings.rate; u.pitch=1;
+    S.speaking=true; const fin=()=>{ if(!S.speaking) return; S.speaking=false; clearTimeout(watchdog); if(onend) onend(); };
+    u.onend=fin; u.onerror=fin;
+    watchdog=setTimeout(fin, Math.min(240000, 4000+text.split(/\s+/).length*520/S.settings.rate));
+    speechSynthesis.speak(u);
+    const tick=setInterval(()=>{ if(!S.speaking){clearInterval(tick);return;} try{ speechSynthesis.pause(); speechSynthesis.resume(); }catch(e){} },10000);
+  }catch(e){ S.speaking=false; if(onend) onend(); }
+}
+window.__guia={narrated:[],S,feed:(lat,lon,acc,t)=>onPos({coords:{latitude:lat,longitude:lon,accuracy:acc||10},timestamp:t||Date.now()}),dist,nearby:(m)=>nearby(m),setPlan:p=>{S.plan=normalizePlan(p);savePlan();renderDiary();}}; // para testes
+
+/* ---------- narração ---------- */
+function narrate(p,info,opts){
+  opts=opts||{}; S.last=p; if(!opts.silentMark){ S.done.set(p.id,Date.now()); saveDone(); refreshCounts(); }
+  window.__guia.narrated.push(p.id); mapMarkers();
+  const d=info?Math.round(info.d):null;
+  $('#now').innerHTML='<div class="eyebrow">'+esc(poiTipo(p)||'ponto')+(p.bairro?' · '+esc(p.bairro):'')+(d!=null?' · '+d+' m ao '+card(info.b):'')+'</div><h2>'+esc(p.nome)+'</h2><p>'+esc(p.narracao)+'</p>'+(p.dica?'<p class="dica">'+esc(p.dica)+'</p>':'')+
+    (p.saiba_mais?'<p><button class="small" id="btnMais">Saiba mais (ouvir)</button></p><div class="mais" id="mais" hidden>'+esc(p.saiba_mais)+'</div>':'')+
+    '<p class="meta">'+esc(p.cidade)+(p.fontes&&p.fontes.length?' · fontes: '+p.fontes.map(f=>'<a href="'+esc(f)+'" target="_blank" rel="noopener" style="color:inherit">'+esc(String(f).replace(/^https?:\/\//,'').split('/')[0])+'</a>').join(', '):'')+'</p>';
+  $('#now').scrollTop=0;
+  const bm=$('#btnMais'); if(bm) bm.onclick=()=>{ $('#mais').hidden=false; bm.textContent='Lendo…'; say(p.saiba_mais,()=>{bm.textContent='Saiba mais (ouvir de novo)';}); };
+  const txt=p.nome+'. '+p.narracao+(p.dica?' Dica: '+p.dica:'');
+  say(txt, ()=>{ if(!S.active||!S.pos) return; if(S.route){ routeAdvanceIfArrived(p); announceNext(true); return; } const nx=nearby(400).filter(x=>x.p.id!==p.id&&notNarratedRecently(x.p.id))[0]; if(nx) say('Perto daqui, a '+Math.round(nx.d)+' metros para '+card(nx.b)+': '+nx.p.nome+'.'); });
+}
+function checkTrigger(){
+  if(!S.active||!S.settings.auto||S.speaking||!S.pos) return;
+  const hit=nearby(300).find(x=>x.d<=(poiRaio(x.p)+S.settings.raio+Math.min(S.pos.acc||0,30)*0.5)&&notNarratedRecently(x.p.id));
+  if(hit) narrate(hit.p,hit);
+}
+
+/* ---------- GPS ---------- */
+function onPos(ev){
+  const c=ev.coords; const now=ev.timestamp||Date.now();
+  if(c.accuracy>150){ $('#gps').textContent='GPS fraco ±'+Math.round(c.accuracy)+' m'; $('#gps').className='bad'; return; }
+  S.pos={lat:c.latitude,lon:c.longitude,acc:c.accuracy,t:now};
+  const g=$('#gps'); g.textContent='GPS ±'+Math.round(c.accuracy)+' m'; g.className=c.accuracy<=40?'ok':'bad';
+  const city=cityOf(S.pos); if(city) $('#cidade').textContent=city;
+  const lastT=S.track[S.track.length-1];
+  if(!lastT||now-lastT.t>30000||dist(lastT,S.pos)>25){ S.track.push({lat:+S.pos.lat.toFixed(5),lon:+S.pos.lon.toFixed(5),t:now}); saveTrack(); }
+  if(S.settings.diaryAuto) stayDetector(S.pos,now);
+  checkTrigger();
+  routeTick(now);
+  mapPos();
+}
+function onGeoErr(err){ $('#gps').textContent='GPS: '+(err.code===1?'permissão negada':'sem sinal'); $('#gps').className='bad'; }
+function startGeo(){ if(!navigator.geolocation){ toast('Este navegador não tem GPS.'); return false; } if(S.watch==null) S.watch=navigator.geolocation.watchPosition(onPos,onGeoErr,{enableHighAccuracy:true,maximumAge:5000,timeout:25000}); return true; }
+function refreshGeo(){
+  if(!navigator.geolocation){ toast('Este navegador não tem GPS.'); return; }
+  const b=$('#btnRefresh'); b.disabled=true; b.textContent='Localizando…';
+  navigator.geolocation.getCurrentPosition(ev=>{
+    onPos(ev); b.disabled=false; b.textContent='Atualizar localização';
+    const n=nearby(2000)[0]; const msg='Posição ±'+Math.round(ev.coords.accuracy)+' m'+(n?' · mais perto: '+n.p.nome+' a '+Math.round(n.d)+' m ao '+card(n.b):' · nenhum ponto da base a menos de 2 km');
+    const st=$('#stats'); if(st) st.textContent=msg; const L=$('#list'); L.hidden=false; L.innerHTML='<div class="eyebrow">Localização atualizada '+hm(Date.now())+'</div><p id="refreshMsg">'+esc(msg)+'</p>'; toast(msg); startGeo();
+  },err=>{ b.disabled=false; b.textContent='Atualizar localização';
+    if(err.code!==1&&S.pos){ const n=nearby(2000)[0]; const msg='Sem fix novo; última posição ('+hm(S.pos.t)+') ±'+Math.round(S.pos.acc)+' m'+(n?' · mais perto: '+n.p.nome+' a '+Math.round(n.d)+' m ao '+card(n.b):''); const L=$('#list'); L.hidden=false; L.innerHTML='<div class="eyebrow">Localização</div><p id="refreshMsg">'+esc(msg)+'</p>'; toast(msg); startGeo(); return; }
+    onGeoErr(err); toast(err.code===1?'Permissão de localização negada. Libere em Configurações do site.':'GPS sem sinal — vá para área aberta e tente de novo.'); },{enableHighAccuracy:true,maximumAge:0,timeout:12000});
+}
+async function wakeOn(){ try{ if('wakeLock' in navigator&&!S.wake){ S.wake=await navigator.wakeLock.request('screen'); S.wake.addEventListener('release',()=>{S.wake=null;}); } }catch(e){} }
+document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==='visible'&&(S.active||S.settings.diaryAuto)) wakeOn(); });
+
+/* ---------- ROTEIRO (privado: fica só neste aparelho) ---------- */
+function normalizePlan(p){
+  const plan={titulo:p.titulo||'Roteiro',hoteis:(p.hoteis||[]).filter(h=>isFinite(h.lat)&&isFinite(h.lon)),itens:[]};
+  (p.itens||[]).forEach((it,i)=>{ plan.itens.push({id:it.id||('p'+it.dia+'-'+pad(i)),dia:it.dia,hora:it.hora||'',titulo:it.titulo||'',tipo:it.tipo||'visita',lat:it.lat,lon:it.lon,detalhes:it.detalhes||'',status:it.status||'planejado',entryId:it.entryId||null,nota:it.nota||'',pois:Array.isArray(it.pois)?it.pois:null}); });
+  return plan;
+}
+function planTime(it){ const [y,m,d]=it.dia.split('-'); const [h,mi]=(it.hora||'00:00').split(':'); return new Date(+y,+m-1,+d,+h||0,+mi||0).getTime(); }
+function matchPlan(e){ // casa um registro do diário com um item planejado do mesmo dia num raio de 150 m
+  if(!S.plan) return null; const day=dayKey(e.start);
+  const c=S.plan.itens.filter(it=>it.dia===day&&it.status==='planejado'&&isFinite(it.lat)&&dist(it,e)<=150).sort((a,b)=>Math.abs(planTime(a)-e.start)-Math.abs(planTime(b)-e.start))[0];
+  if(c){ c.status='feito'; c.entryId=e.id; e.planId=c.id; if(!e.place) e.place=c.titulo; if(c.tipo in TYPES) e.type=c.tipo; savePlan(); toast('✓ Roteiro: '+c.titulo); }
+  return c;
+}
+
+/* ---------- DIÁRIO: detector de paradas ---------- */
+function stayDetector(pos,now){
+  const STAY=S.settings.stay*60000, RAD=45, LEAVE=90, LEAVE_T=180000;
+  if(S.open){
+    const e=S.open; const far=dist(pos,e)>LEAVE;
+    if(!far){ e.end=now; S.away=null; saveDiary(); }
+    else { if(!S.away) S.away=now; if(now-S.away>LEAVE_T){ S.open=null; S.away=null; toast('Parada encerrada: '+e.place); renderDiary(); } }
+    return;
+  }
+  if(!S.cand||dist(pos,S.cand)>RAD){ S.cand={lat:pos.lat,lon:pos.lon,t:now}; return; }
+  S.cand.lat=(S.cand.lat*3+pos.lat)/4; S.cand.lon=(S.cand.lon*3+pos.lon)/4;
+  if(now-S.cand.t>=STAY){ openEntry({lat:S.cand.lat,lon:S.cand.lon,start:S.cand.t,end:now,auto:true}); S.cand=null; }
+}
+function guessType(t,poi,hotel){
+  if(hotel) return 'hotel';
+  const h=new Date(t).getHours()+new Date(t).getMinutes()/60; const tp=poi?poiTipo(poi):'';
+  const cultural=/monumento|miradouro|igreja|museu|pra|rua|bairro|ponte|esta|outro/i.test(tp);
+  const food=/restaurante|bar|mercado|caf/i.test(tp);
+  if(cultural&&!food) return 'visita';
+  if(h>=6&&h<10.5) return 'cafe'; if(h>=11.5&&h<15) return 'almoco'; if(h>=15&&h<18.5) return 'lanche'; if(h>=18.5&&h<23) return 'jantar'; if(h>=23||h<5) return 'noite';
+  return food?'lanche':'visita';
+}
+const TYPES={cafe:'Café',almoco:'Almoço',lanche:'Lanche',jantar:'Jantar',noite:'Noite',visita:'Visita',hotel:'Hotel',compras:'Compras',evento:'Evento',voo:'Voo',carro:'Carro',outro:'Outro'};
+function openEntry(o){
+  const near=nearby(70,o)[0]; const hotel=nearestHotel(o);
+  const e={id:'e'+o.start+Math.random().toString(36).slice(2,6),start:o.start,end:o.end,lat:+o.lat.toFixed(5),lon:+o.lon.toFixed(5),
+           place:hotel?hotel.nome:(near?near.p.nome:''),poiId:near?near.p.id:null,type:guessType(o.start,near?near.p:null,hotel),note:'',auto:!!o.auto,city:cityOf(o)||'',planId:null};
+  S.diary.push(e); if(o.auto) S.open=e; matchPlan(e); saveDiary(); renderDiary();
+  if(!e.place) geocode(e);
+  toast((o.auto?'Parada registrada: ':'Registrado: ')+(e.place||'localizando…'));
+  return e;
+}
+async function geocode(e){
+  if(!S.settings.geocode||!navigator.onLine) { if(!e.place){ e.place=e.lat+', '+e.lon; saveDiary(); renderDiary(); } return; }
+  const key=e.lat.toFixed(4)+','+e.lon.toFixed(4);
+  if(S.geoCache[key]){ e.place=S.geoCache[key]; saveDiary(); renderDiary(); return; }
+  try{
+    const r=await fetch('https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=18&accept-language=pt&lat='+e.lat+'&lon='+e.lon);
+    const j=await r.json(); const a=j.address||{};
+    const name=j.name||a.amenity||a.tourism||a.shop||a.building||[a.road,a.house_number].filter(Boolean).join(' ')||j.display_name||key;
+    e.place=name; S.geoCache[key]=name; store('guia.geocache',S.geoCache); saveDiary(); renderDiary();
+  }catch(err){ if(!e.place){ e.place=key; saveDiary(); renderDiary(); } }
+}
+
+/* ---------- FOTOS + IA ---------- */
+async function takePhoto(file){
+  if(!file) return;
+  const t=Date.now(); const pos=S.pos||null; const near=pos?nearby(120,pos)[0]:null;
+  let data; try{ data=await resizeImage(file,1280); }catch(e){ toast('Não consegui ler a foto.'); return; }
+  const ph={id:'f'+t+Math.random().toString(36).slice(2,5),t,lat:pos?+pos.lat.toFixed(5):null,lon:pos?+pos.lon.toFixed(5):null,place:near?near.p.nome:'',poiId:near?near.p.id:null,city:pos?(cityOf(pos)||''):'',note:'',ai:'',data};
+  try{ await DB.put(ph); S.photos.push(ph); }catch(e){ toast('Sem espaço para guardar a foto.'); return; }
+  toast('Foto guardada'+(ph.place?' · '+ph.place:'')+'.');
+  S.day=dayKey(t); $$('nav [role=tab]').find(b=>b.dataset.tab==='diario').click();
+  if(S.apiKey&&navigator.onLine) identifyPhoto(ph);
+}
+async function identifyPhoto(ph){
+  if(!S.apiKey){ toast('Cole a chave da API Claude em Ajustes para identificar fotos.'); return; }
+  if(!navigator.onLine){ toast('Sem internet agora; tente depois.'); return; }
+  const btn=document.querySelector('[data-ai="'+ph.id+'"]'); if(btn){ btn.disabled=true; btn.textContent='Analisando…'; }
+  const ctx=[]; if(ph.lat!=null) ctx.push('Coordenadas GPS: '+ph.lat+', '+ph.lon+(ph.city?' ('+ph.city+')':''));
+  const nb=(ph.lat!=null)?nearby(250,{lat:ph.lat,lon:ph.lon}).slice(0,5):[]; if(nb.length) ctx.push('Pontos da base próximos: '+nb.map(x=>x.p.nome+' ('+Math.round(x.d)+' m)').join('; '));
+  if(S.plan){ const d=dayKey(ph.t); const it=S.plan.itens.filter(i=>i.dia===d).map(i=>i.hora+' '+i.titulo).join('; '); if(it) ctx.push('Roteiro do dia: '+it); }
+  const prompt='Você é um guia turístico culto falando em português do Brasil. Identifique o que aparece nesta foto (monumento, prédio, obra, prato, rua, paisagem) e explique em até 150 palavras, em texto corrido para ser lido em voz alta: o que é, história essencial, um detalhe para reparar e uma curiosidade. Se não tiver certeza, diga a hipótese mais provável e o porquê. Contexto: '+(ctx.join('. ')||'sem GPS')+'.';
+  const b64=ph.data.split(',')[1];
+  try{
+    const r=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'content-type':'application/json','x-api-key':S.apiKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
+      body:JSON.stringify({model:S.settings.model||'claude-sonnet-4-5',max_tokens:600,messages:[{role:'user',content:[{type:'image',source:{type:'base64',media_type:'image/jpeg',data:b64}},{type:'text',text:prompt}]}]})});
+    const j=await r.json();
+    if(!r.ok){ throw new Error((j.error&&j.error.message)||('HTTP '+r.status)); }
+    const text=(j.content||[]).filter(c=>c.type==='text').map(c=>c.text).join('\n').trim();
+    ph.ai=text; await DB.put(ph); renderDiary(); say(text);
+  }catch(e){ toast('IA: '+e.message); if(btn){ btn.disabled=false; btn.textContent='O que é isto?'; } }
+}
+$('#btnPhoto').onclick=()=>{ if(!S.pos) startGeo(); $('#filePhoto').click(); };
+$('#btnPhoto2').onclick=()=>$('#btnPhoto').click();
+$('#filePhoto').onchange=ev=>{ const f=ev.target.files[0]; ev.target.value=''; takePhoto(f); };
+
+/* ---------- DIÁRIO: interface ---------- */
+function allDays(){
+  const days=new Set(S.diary.map(e=>dayKey(e.start))); S.photos.forEach(p=>days.add(dayKey(p.t))); if(S.plan) S.plan.itens.forEach(i=>days.add(i.dia)); days.add(dayKey(Date.now()));
+  return [...days].sort();
+}
+function renderDiary(){
+  const days=allDays(); const today=dayKey(Date.now());
+  if(!S.day||!days.includes(S.day)) S.day=today;
+  $('#daysel').innerHTML=days.map(d=>'<button data-day="'+d+'" aria-selected="'+(d===S.day)+'">'+dayLabel(d)+'</button>').join('');
+  $$('#daysel button').forEach(b=>b.onclick=()=>{S.day=b.dataset.day;renderDiary();});
+  const sel=$('#daysel [aria-selected=true]'); if(sel) sel.scrollIntoView({inline:'center',block:'nearest'});
+  const items=[];
+  S.diary.filter(e=>dayKey(e.start)===S.day).forEach(e=>items.push({k:'e',t:e.start,e}));
+  S.photos.filter(p=>dayKey(p.t)===S.day).forEach(p=>items.push({k:'f',t:p.t,p}));
+  if(S.plan) S.plan.itens.filter(i=>i.dia===S.day).forEach(i=>items.push({k:'p',t:planTime(i),i}));
+  items.sort((a,b)=>a.t-b.t);
+  const box=$('#diary');
+  const city=(items.find(x=>x.k==='e')||{e:{}}).e.city||'';
+  if(!items.length){ box.innerHTML='<div class="eyebrow">'+dayLabel(S.day)+'</div><p>Nenhum registro ainda. As paradas de mais de '+S.settings.stay+' min entram sozinhas; o botão abaixo registra agora.</p>'; return; }
+  box.innerHTML='<div class="eyebrow">'+dayLabel(S.day)+' · '+items.length+' itens'+(city?' · '+city:'')+'</div>'+items.map(x=>{
+    if(x.k==='p'){ const i=x.i; const linked=i.entryId?S.diary.find(e=>e.id===i.entryId):null;
+      return '<div class="entry plan '+i.status+'" data-plan="'+i.id+'"><div class="top"><div class="place">'+(i.status==='feito'?'✓ ':i.status==='pulado'?'— ':'◻ ')+esc(i.titulo)+'</div><div class="time">'+esc(i.hora)+' · '+esc(TYPES[i.tipo]||i.tipo)+'</div></div>'+
+        (i.detalhes?'<div class="det">'+esc(i.detalhes)+'</div>':'')+(linked?'<div class="meta">registrado '+hm(linked.start)+'–'+hm(linked.end)+(linked.place?' · '+esc(linked.place):'')+'</div>':'')+
+        '<div class="editform" data-edit hidden><div class="r"><input type="time" value="'+esc(i.hora)+'" data-f="hora"><input type="text" value="'+esc(i.titulo)+'" data-f="titulo" placeholder="Título"></div><textarea data-f="detalhes" placeholder="Detalhes">'+esc(i.detalhes)+'</textarea><div class="chips">'+Object.entries(TYPES).map(([k,v])=>'<button class="chip" data-ptype="'+k+'" aria-pressed="'+(i.tipo===k)+'">'+v+'</button>').join('')+'</div><div class="chips"><button class="chip ok" data-act="save">Salvar</button><button class="chip" data-act="cancel">Cancelar</button><button class="chip" data-act="delplan">Apagar item</button></div></div>'+
+        '<div class="chips" data-actions>'+(i.status!=='feito'?'<button class="chip ok" data-act="feito">Feito</button>':'<button class="chip" data-act="reabrir">Reabrir</button>')+'<button class="chip" data-act="edit">Editar</button>'+(i.status==='planejado'?'<button class="chip" data-act="pular">Pular</button>':'')+(isFinite(i.lat)?'<button class="chip" data-act="ir">Como chegar</button>':'')+'<button class="chip" data-act="ouvir">Ouvir</button></div></div>'; }
+    if(x.k==='f'){ const p=x.p;
+      return '<div class="entry" data-photo="'+p.id+'"><div class="top"><div class="place">📷 '+esc(p.place||'Foto')+'</div><div class="time">'+hm(p.t)+'</div></div><img src="'+p.data+'" alt="foto" loading="lazy">'+(p.ai?'<div class="ai">'+esc(p.ai)+'</div>':'')+
+        '<textarea placeholder="Nota sobre a foto…" data-fnote>'+esc(p.note)+'</textarea><div class="chips">'+(p.ai?'<button class="chip" data-act="ouvirai">Ouvir</button>':'')+'<button class="chip ok" data-ai="'+p.id+'">'+(p.ai?'Analisar de novo':'O que é isto?')+'</button><button class="chip" data-act="frename">Renomear</button><button class="chip" data-act="fdel">Apagar</button></div></div>'; }
+    const e=x.e; const open=S.open&&S.open.id===e.id;
+    return '<div class="entry" data-id="'+e.id+'"><div class="top"><div class="place">'+esc(e.place||'…')+'</div><div class="time">'+hm(e.start)+'–'+(open?'agora':hm(e.end))+' · '+fmtDur((open?Date.now():e.end)-e.start)+(e.auto?' · auto':'')+'</div></div>'+
+      '<div class="chips">'+Object.entries(TYPES).map(([k,v])=>'<button class="chip" data-type="'+k+'" aria-pressed="'+(e.type===k)+'">'+v+'</button>').join('')+'</div>'+
+      '<textarea placeholder="Nota: o que comeu, com quem, o que valeu…" data-note>'+esc(e.note)+'</textarea>'+
+      '<div class="chips"><button class="chip" data-act="rename">Renomear lugar</button><button class="chip" data-act="poi">Ouvir sobre o lugar</button><button class="chip" data-act="del">Apagar</button></div></div>';
+  }).join('');
+  // registros
+  box.querySelectorAll('.entry[data-id]').forEach(el=>{
+    const e=S.diary.find(x=>x.id===el.dataset.id);
+    el.querySelectorAll('[data-type]').forEach(c=>c.onclick=()=>{ e.type=c.dataset.type; saveDiary(); renderDiary(); });
+    const ta=el.querySelector('[data-note]'); ta.oninput=()=>{ e.note=ta.value; saveDiary(); };
+    el.querySelector('[data-act=rename]').onclick=()=>{ const n=window.prompt('Nome do lugar', e.place||''); if(n!=null){ e.place=n.trim(); saveDiary(); renderDiary(); } };
+    el.querySelector('[data-act=poi]').onclick=()=>{ const p=e.poiId?S.pois.find(q=>q.id===e.poiId):nearby(120,e)[0]?.p; if(p) narrate(p,S.pos?{d:dist(S.pos,p),b:bearing(S.pos,p)}:null,{silentMark:true}); else toast('Sem ponto da base neste lugar.'); };
+    el.querySelector('[data-act=del]').onclick=()=>{ if(el.dataset.confirm){ S.diary=S.diary.filter(x=>x.id!==e.id); if(S.open&&S.open.id===e.id) S.open=null; if(S.plan) S.plan.itens.forEach(i=>{ if(i.entryId===e.id){ i.entryId=null; } }); savePlan(); saveDiary(); renderDiary(); } else { el.dataset.confirm='1'; el.querySelector('[data-act=del]').textContent='Confirmar apagar'; } };
+  });
+  // fotos
+  box.querySelectorAll('.entry[data-photo]').forEach(el=>{
+    const p=S.photos.find(x=>x.id===el.dataset.photo);
+    const ta=el.querySelector('[data-fnote]'); ta.oninput=()=>{ p.note=ta.value; DB.put(p).catch(()=>{}); };
+    el.querySelector('[data-ai]').onclick=()=>identifyPhoto(p);
+    const oa=el.querySelector('[data-act=ouvirai]'); if(oa) oa.onclick=()=>say(p.ai);
+    el.querySelector('[data-act=frename]').onclick=()=>{ const n=window.prompt('Lugar da foto', p.place||''); if(n!=null){ p.place=n.trim(); DB.put(p).then(renderDiary); } };
+    el.querySelector('[data-act=fdel]').onclick=()=>{ if(el.dataset.confirm){ DB.del(p.id).then(()=>{ S.photos=S.photos.filter(x=>x.id!==p.id); renderDiary(); }); } else { el.dataset.confirm='1'; el.querySelector('[data-act=fdel]').textContent='Confirmar apagar'; } };
+  });
+  // roteiro
+  box.querySelectorAll('.entry[data-plan]').forEach(el=>{
+    const i=S.plan.itens.find(x=>x.id===el.dataset.plan);
+    const act=a=>el.querySelector('[data-act='+a+']');
+    if(act('feito')) act('feito').onclick=()=>{ i.status='feito'; if(!i.entryId){ const now=Date.now(); const e={id:'e'+now,start:now-600000,end:now,lat:S.pos?+S.pos.lat.toFixed(5):i.lat,lon:S.pos?+S.pos.lon.toFixed(5):i.lon,place:i.titulo,poiId:null,type:(i.tipo in TYPES)?i.tipo:'visita',note:'',auto:false,city:cityOf(S.pos||i)||'',planId:i.id}; S.diary.push(e); i.entryId=e.id; saveDiary(); } savePlan(); renderDiary(); };
+    if(act('reabrir')) act('reabrir').onclick=()=>{ i.status='planejado'; savePlan(); renderDiary(); };
+    if(act('pular')) act('pular').onclick=()=>{ i.status='pulado'; savePlan(); renderDiary(); };
+    if(act('ir')) act('ir').onclick=()=>window.open('https://www.google.com/maps/dir/?api=1&destination='+i.lat+','+i.lon+'&travelmode=walking','_blank');
+    act('ouvir').onclick=()=>say(i.hora+'. '+i.titulo+'. '+(i.detalhes||''));
+    act('edit').onclick=()=>{ el.querySelector('[data-edit]').hidden=false; el.querySelector('[data-actions]').hidden=true; };
+    act('cancel').onclick=()=>renderDiary();
+    el.querySelectorAll('[data-ptype]').forEach(c=>c.onclick=()=>{ el.querySelectorAll('[data-ptype]').forEach(x=>x.setAttribute('aria-pressed',x===c)); });
+    act('save').onclick=()=>{ i.hora=el.querySelector('[data-f=hora]').value; i.titulo=el.querySelector('[data-f=titulo]').value.trim(); i.detalhes=el.querySelector('[data-f=detalhes]').value; const tp=el.querySelector('[data-ptype][aria-pressed=true]'); if(tp) i.tipo=tp.dataset.ptype; savePlan(); renderDiary(); toast('Item atualizado.'); };
+    act('delplan').onclick=()=>{ S.plan.itens=S.plan.itens.filter(x=>x!==i); savePlan(); renderDiary(); };
+  });
+}
+function diaryMarkdown(day){
+  const days=day?[day]:allDays(); let md='# Diário de viagem\n';
+  days.forEach(d=>{
+    const items=[]; S.diary.filter(e=>dayKey(e.start)===d).forEach(e=>items.push({t:e.start,s:'- '+hm(e.start)+'–'+hm(e.end)+' ('+fmtDur(e.end-e.start)+') · **'+(TYPES[e.type]||e.type)+'** · '+(e.place||'')+(e.note?' — '+e.note.replace(/\n/g,' '):'')+' · [mapa](https://www.google.com/maps/search/?api=1&query='+e.lat+','+e.lon+')'}));
+    S.photos.filter(p=>dayKey(p.t)===d).forEach(p=>items.push({t:p.t,s:'- '+hm(p.t)+' · 📷 '+(p.place||'foto')+(p.note?' — '+p.note:'')+(p.ai?'\n  > '+p.ai.replace(/\n/g,' '):'')}));
+    if(S.plan) S.plan.itens.filter(i=>i.dia===d&&!i.entryId).forEach(i=>items.push({t:planTime(i),s:'- '+i.hora+' · '+(i.status==='feito'?'✓':i.status==='pulado'?'(pulado)':'◻')+' '+i.titulo+(i.detalhes?' — '+i.detalhes.replace(/\n/g,' '):'')}));
+    if(!items.length) return; md+='\n## '+dayLabel(d)+'\n'+items.sort((a,b)=>a.t-b.t).map(x=>x.s).join('\n')+'\n';
+  });
+  return md;
+}
+function playbookHTML(){
+  const days=allDays(); const esc2=esc;
+  let h='<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Playbook da viagem</title><style>body{font:16px/1.5 Georgia,serif;max-width:760px;margin:24px auto;padding:0 16px;color:#222;background:#fbfaf7}h1{font-size:28px}h2{border-bottom:2px solid #e2b55b;padding-bottom:4px;margin-top:36px}.it{margin:14px 0;padding:10px 12px;border-left:3px solid #ddd}.it.plan{border-color:#e2b55b}.it.feito{border-color:#5a9}.it.pulado{opacity:.55}.t{color:#777;font-size:13px}img{max-width:100%;border-radius:8px;margin:8px 0}.ai{background:#eef7f1;padding:8px 10px;border-radius:8px;font-size:15px}.det{font-size:14px;color:#555;white-space:pre-line}@media print{body{background:#fff}}</style></head><body><h1>'+esc2(S.plan?S.plan.titulo:'Diário de viagem')+'</h1><p class="t">Gerado em '+new Date().toLocaleString('pt-BR')+' pelo Guia de Bolso</p>';
+  days.forEach(d=>{
+    const items=[];
+    S.diary.filter(e=>dayKey(e.start)===d).forEach(e=>items.push({t:e.start,h:'<div class="it"><div class="t">'+hm(e.start)+'–'+hm(e.end)+' · '+fmtDur(e.end-e.start)+' · '+(TYPES[e.type]||e.type)+'</div><b>'+esc2(e.place||'')+'</b>'+(e.note?'<div>'+esc2(e.note)+'</div>':'')+'</div>'}));
+    S.photos.filter(p=>dayKey(p.t)===d).forEach(p=>items.push({t:p.t,h:'<div class="it"><div class="t">'+hm(p.t)+' · foto</div><b>'+esc2(p.place||'')+'</b><img src="'+p.data+'">'+(p.ai?'<div class="ai">'+esc2(p.ai)+'</div>':'')+(p.note?'<div>'+esc2(p.note)+'</div>':'')+'</div>'}));
+    if(S.plan) S.plan.itens.filter(i=>i.dia===d).forEach(i=>items.push({t:planTime(i),h:'<div class="it plan '+i.status+'"><div class="t">'+esc2(i.hora)+' · '+(TYPES[i.tipo]||i.tipo)+' · '+(i.status==='feito'?'feito':i.status==='pulado'?'pulado':'planejado')+'</div><b>'+esc2(i.titulo)+'</b>'+(i.detalhes?'<div class="det">'+esc2(i.detalhes)+'</div>':'')+'</div>'}));
+    if(!items.length) return; h+='<h2>'+dayLabel(d)+'</h2>'+items.sort((a,b)=>a.t-b.t).map(x=>x.h).join('');
+  });
+  return h+'</body></html>';
+}
+$('#btnLog').onclick=()=>{ if(!S.pos){ if(startGeo()) toast('Aguardando GPS… toque de novo em alguns segundos.'); return; } openEntry({lat:S.pos.lat,lon:S.pos.lon,start:Date.now()-60000,end:Date.now(),auto:false}); };
+$('#btnExport').onclick=()=>shareOrDownload('diario-'+S.day+'.md',diaryMarkdown(S.day),'text/markdown','Diário '+dayLabel(S.day));
+$('#btnPlaybook').onclick=()=>shareOrDownload('playbook-viagem.html',playbookHTML(),'text/html','Playbook da viagem');
+
+/* ---------- ROTA DO DIA: guia pelos caminhos entre os pontos ---------- */
+function buildRoute(){
+  const today=dayKey(Date.now()); const targets=[]; const seen=new Set();
+  const items=S.plan?S.plan.itens.filter(i=>i.dia===today).sort((a,b)=>planTime(a)-planTime(b)):[];
+  items.forEach(i=>{
+    if(i.status==='pulado') return;
+    if(i.pois&&i.pois.length){ i.pois.forEach(id=>{ const q=S.pois.find(x=>x.id===id); if(q&&!seen.has(q.id)){ seen.add(q.id); targets.push({id:q.id,nome:q.nome,lat:q.lat,lon:q.lon,raio:poiRaio(q),poi:q,planId:i.id}); } }); }
+    else if(isFinite(i.lat)&&!/voo|carro|hotel/.test(i.tipo)&&i.status!=='feito'){ targets.push({id:i.id,nome:i.titulo,lat:i.lat,lon:i.lon,raio:60,plan:i}); }
+  });
+  if(!targets.length&&S.pos){ nearby(1500).filter(x=>notNarratedRecently(x.p.id)).slice(0,10).forEach(x=>targets.push({id:x.p.id,nome:x.p.nome,lat:x.p.lat,lon:x.p.lon,raio:poiRaio(x.p),poi:x.p})); }
+  // pula o que já foi narrado hoje
+  const pending=targets.filter(t=>!(t.poi&&!notNarratedRecently(t.poi.id)));
+  return pending;
+}
+function heading(){ // direção do movimento pelos últimos pontos da trilha (> 12 m)
+  const tr=S.track; if(tr.length<2) return null; const last=tr[tr.length-1];
+  for(let i=tr.length-2;i>=Math.max(0,tr.length-8);i--){ if(dist(tr[i],last)>12&&last.t-tr[i].t<240000) return bearing(tr[i],last); }
+  return null;
+}
+function relDir(b){ const h=heading(); if(h==null) return 'para '+card(b); const d=((b-h)%360+540)%360-180; if(Math.abs(d)<=30) return 'à sua frente'; if(Math.abs(d)>=150) return 'atrás de você'; return d>0?'à sua direita':'à sua esquerda'; }
+function routeTarget(){ if(!S.route) return null; while(S.route.i<S.route.targets.length){ const t=S.route.targets[S.route.i]; if(t.poi&&!notNarratedRecently(t.poi.id)){ S.route.i++; continue; } if(t.plan&&t.plan.status!=='planejado'){ S.route.i++; continue; } return t; } return null; }
+function routeAdvanceIfArrived(p){ const t=routeTarget(); if(t&&t.poi&&t.poi.id===p.id) S.route.i++; }
+function announceNext(spoken){
+  const t=routeTarget(); renderRoute();
+  if(!t){ if(spoken) say('Fim da rota de hoje. Toque em Rota do dia para montar outra.'); S.route=null; $('#btnSkip').hidden=true; $('#btnMaps').hidden=true; renderRoute(); return; }
+  if(!S.pos) return;
+  const d=Math.round(dist(S.pos,t)), b=bearing(S.pos,t);
+  S.lastGuide={t:Date.now(),d};
+  if(spoken) say('Próximo: '+t.nome+', a '+d+' metros, '+relDir(b)+'.');
+}
+function routeTick(now){
+  if(!S.route||!S.active||S.speaking) return; const t=routeTarget(); if(!t){ announceNext(true); return; }
+  const d=dist(S.pos,t), b=bearing(S.pos,t);
+  if(d<=t.raio+S.settings.raio+Math.min(S.pos.acc||0,30)*0.5){
+    if(t.poi){ if(notNarratedRecently(t.poi.id)) narrate(t.poi,{d,b}); else { S.route.i++; announceNext(true); } }
+    else { if(t.plan){ t.plan.status='feito'; savePlan(); } S.route.i++; say('Você chegou: '+t.nome+'.',()=>announceNext(true)); }
+    return;
+  }
+  const g=S.lastGuide; if(now-g.t>75000||Math.abs(g.d-d)>120){ S.lastGuide={t:now,d}; say(t.nome+', '+Math.round(d)+' metros, '+relDir(b)+'.'); renderRoute(); }
+}
+function renderRoute(){
+  mapRoute();
+  if(!S.route){ return; }
+  const L=$('#list'); L.hidden=false; const cur=routeTarget();
+  L.innerHTML='<div class="eyebrow">Rota do dia · '+S.route.targets.length+' pontos</div>'+S.route.targets.map((t,i)=>{ const done=i<S.route.i; const d=S.pos?Math.round(dist(S.pos,t)):null; return '<div class="row'+(done?' done':'')+'"><div><b>'+(done?'✓ ':cur&&cur.id===t.id?'➜ ':'')+esc(t.nome)+'</b><span>'+(d!=null?d+' m · '+card(bearing(S.pos,t)):'')+'</span></div>'+(t.poi?'<button class="small" data-id="'+t.poi.id+'">Ouvir</button>':'')+'</div>'; }).join('');
+  L.querySelectorAll('button').forEach(b=>b.onclick=()=>{ const p=S.pois.find(q=>q.id===b.dataset.id); if(p) narrate(p,S.pos?{d:dist(S.pos,p),b:bearing(S.pos,p)}:null,{silentMark:true}); });
+}
+function mapsRouteURL(){ if(!S.route) return null; const rest=S.route.targets.slice(S.route.i,S.route.i+10); if(!rest.length) return null; const dest=rest[rest.length-1]; const wps=rest.slice(0,-1).map(t=>t.lat+','+t.lon).join('|'); return 'https://www.google.com/maps/dir/?api=1'+(S.pos?'&origin='+S.pos.lat+','+S.pos.lon:'')+'&destination='+dest.lat+','+dest.lon+(wps?'&waypoints='+encodeURIComponent(wps):'')+'&travelmode=walking'; }
+$('#btnRoute').onclick=async()=>{
+  if(!startGeo()) return; if(!S.active){ S.active=true; await wakeOn(); $('#btnStart').textContent='Guia ligado'; $('#btnStart').disabled=true; }
+  const targets=buildRoute(); if(!targets.length){ toast('Sem pontos pendentes para hoje (ou ainda sem GPS).'); return; }
+  S.route={targets,i:0}; $('#btnSkip').hidden=false; $('#btnMaps').hidden=false; renderRoute();
+  if(S.pos) announceNext(true); else say('Rota montada com '+targets.length+' pontos. Aguardando o GPS.');
+};
+$('#btnSkip').onclick=()=>{ if(!S.route) return; const t=routeTarget(); if(t){ S.route.i++; toast('Pulado: '+t.nome); } announceNext(true); };
+$('#btnMaps').onclick=()=>{ const u=mapsRouteURL(); if(u) window.open(u,'_blank'); else toast('Rota concluída.'); };
+
+/* ---------- MAPA (Leaflet + OpenStreetMap; caminho a pé via roteador OSRM do OSM) ---------- */
+const M={map:null,me:null,acc:null,layer:null,route:null,marks:{},routeKey:'',next:null};
+function showMap(){
+  if(!window.L){ toast('Mapa indisponível sem internet.'); return; }
+  if(!M.map){
+    M.map=L.map('map',{zoomControl:true,attributionControl:true});
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap'}).addTo(M.map);
+    M.layer=L.layerGroup().addTo(M.map);
+    const c=S.pos||(S.pois[0]?{lat:S.pois[0].lat,lon:S.pois[0].lon}:{lat:38.7108,lon:-9.1432});
+    M.map.setView([c.lat,c.lon],S.pos?16:14);
+    mapMarkers(); mapPos(); mapRoute();
+  }
+  setTimeout(()=>{ M.map.invalidateSize(); },60);
+}
+function mapMarkers(){
+  if(!M.map) return;
+  M.layer.clearLayers(); M.marks={};
+  const city=S.pos?cityOf(S.pos):null;
+  S.pois.filter(p=>!city||p.cidade===city).forEach(p=>{
+    const done=!notNarratedRecently(p.id);
+    const m=L.circleMarker([p.lat,p.lon],{radius:7,color:done?'#7f8aa6':'#f2b134',fillColor:done?'#7f8aa6':'#f2b134',fillOpacity:.9,weight:2});
+    m.bindPopup('<b>'+esc(p.nome)+'</b><br>'+esc(poiTipo(p))+(S.pos?' · '+Math.round(dist(S.pos,p))+' m':'')+'<br><button data-ouvir="'+p.id+'">Ouvir</button>');
+    m.on('popupopen',e=>{ const b=e.popup.getElement().querySelector('[data-ouvir]'); if(b) b.onclick=()=>{ narrate(p,S.pos?{d:dist(S.pos,p),b:bearing(S.pos,p)}:null,{silentMark:true}); M.map.closePopup(); }; });
+    m.addTo(M.layer); M.marks[p.id]=m;
+  });
+  if(S.plan){ const today=dayKey(Date.now()); S.plan.itens.filter(i=>i.dia===today&&isFinite(i.lat)&&!/voo|carro/.test(i.tipo)).forEach(i=>{
+    const m=L.marker([i.lat,i.lon],{icon:L.divIcon({className:'',html:'<div style="background:'+(i.status==='feito'?'#58c28a':'#ef6f6c')+';color:#fff;border-radius:8px;padding:2px 6px;font:600 11px Roboto,sans-serif;white-space:nowrap;box-shadow:0 1px 4px rgba(0,0,0,.4)">'+esc(i.hora)+' '+esc(i.titulo.split(/[—:–]/)[0].trim().slice(0,22))+'</div>',iconAnchor:[0,10]})});
+    m.bindPopup('<b>'+esc(i.hora)+' · '+esc(i.titulo)+'</b><br>'+esc((i.detalhes||'').slice(0,160))); m.addTo(M.layer); }); }
+}
+function mapPos(){
+  if(!M.map||!S.pos) return;
+  const ll=[S.pos.lat,S.pos.lon];
+  if(!M.me){ M.me=L.circleMarker(ll,{radius:9,color:'#fff',fillColor:'#2f80ed',fillOpacity:1,weight:3}).addTo(M.map); M.acc=L.circle(ll,{radius:S.pos.acc||0,color:'#2f80ed',weight:1,fillOpacity:.08}).addTo(M.map); M.map.setView(ll,16); }
+  else { M.me.setLatLng(ll); M.acc.setLatLng(ll); M.acc.setRadius(S.pos.acc||0); }
+}
+async function mapRoute(){
+  if(!M.map) return;
+  const t=S.route?routeTarget():null;
+  if(M.next){ M.map.removeLayer(M.next); M.next=null; }
+  if(!S.route||!t){ if(M.route){ M.map.removeLayer(M.route); M.route=null; M.routeKey=''; } return; }
+  M.next=L.circleMarker([t.lat,t.lon],{radius:13,color:'#ef6f6c',fillColor:'#ef6f6c',fillOpacity:.35,weight:3}).addTo(M.map).bindTooltip('➜ '+t.nome,{permanent:true,direction:'top',offset:[0,-10]});
+  const rest=S.route.targets.slice(S.route.i,S.route.i+25);
+  const pts=(S.pos?[S.pos]:[]).concat(rest).map(x=>[x.lat,x.lon]);
+  const key=S.route.i+':'+(S.pos?Math.round(S.pos.lat*500)+','+Math.round(S.pos.lon*500):'')+':'+rest.length;
+  if(key===M.routeKey) return; M.routeKey=key;
+  let line=pts;
+  try{
+    if(navigator.onLine&&pts.length>=2){
+      const coords=pts.map(x=>x[1]+','+x[0]).join(';');
+      const r=await fetch('https://routing.openstreetmap.de/routed-foot/route/v1/foot/'+coords+'?overview=full&geometries=geojson&steps=false',{signal:AbortSignal.timeout(12000)});
+      const j=await r.json(); if(j.routes&&j.routes[0]){ line=j.routes[0].geometry.coordinates.map(c=>[c[1],c[0]]); const km=(j.routes[0].distance/1000).toFixed(1), min=Math.round(j.routes[0].duration/60); const st=$('#stats'); if(st) st.textContent='Rota a pé: '+km+' km · ~'+min+' min até o último ponto'; }
+    }
+  }catch(e){}
+  if(M.route) M.map.removeLayer(M.route);
+  M.route=L.polyline(line,{color:'#2f80ed',weight:5,opacity:.8}).addTo(M.map);
+}
+$('#btnMapMe').onclick=()=>{ if(!S.pos){ startGeo(); toast('Aguardando GPS…'); return; } M.map&&M.map.setView([S.pos.lat,S.pos.lon],17); };
+$('#btnMapRoute').onclick=()=>{ if(!S.route){ $('#btnRoute').click(); } if(M.route) M.map.fitBounds(M.route.getBounds(),{padding:[20,20]}); else if(S.route){ const b=L.latLngBounds(S.route.targets.map(t=>[t.lat,t.lon])); M.map.fitBounds(b,{padding:[20,20]}); } };
+
+/* ---------- botões do guia ---------- */
+$('#btnStart').onclick=async()=>{
+  if(!startGeo()) return; S.active=true; await wakeOn();
+  say('Guia ligado. '+(S.pois.length?'':'Sem pontos carregados.'));
+  $('#btnStart').textContent='Guia ligado'; $('#btnStart').disabled=true;
+};
+$('#btnStop').onclick=()=>{ S.active=false; S.route=null; $('#btnSkip').hidden=true; $('#btnMaps').hidden=true; try{speechSynthesis.cancel();}catch(e){} S.speaking=false; $('#btnStart').textContent='Iniciar guia'; $('#btnStart').disabled=false; $('#now').innerHTML='<div class="eyebrow">Pausado</div><h2>Guia parado</h2><p>O diário continua registrando paradas enquanto o app estiver aberto. Toque em Iniciar para voltar a narrar.</p>'; };
+$('#btnRepeat').onclick=()=>{ if(S.last) narrate(S.last,S.pos?{d:dist(S.pos,S.last),b:bearing(S.pos,S.last)}:null,{silentMark:true}); else toast('Nada narrado ainda.'); };
+$('#btnRefresh').onclick=refreshGeo;
+$('#btnNear').onclick=()=>{
+  const L=$('#list'); if(!L.hidden){ L.hidden=true; return; }
+  if(!S.pos){ startGeo(); toast('Aguardando posição do GPS…'); return; }
+  const n=nearby(500); L.hidden=false;
+  if(!n.length){ L.innerHTML='<p>Nenhum ponto da base a menos de 500 m.</p>'; say('Nenhum ponto da base a menos de quinhentos metros.'); return; }
+  L.innerHTML=n.slice(0,12).map(x=>'<div class="row'+(notNarratedRecently(x.p.id)?'':' done')+'"><div><b>'+esc(x.p.nome)+'</b><span>'+Math.round(x.d)+' m · '+card(x.b)+(notNarratedRecently(x.p.id)?'':' · já narrado')+'</span></div><button class="small" data-id="'+x.p.id+'">Ouvir</button></div>').join('');
+  L.querySelectorAll('button').forEach(b=>b.onclick=()=>{ const p=S.pois.find(q=>q.id===b.dataset.id); if(p) narrate(p,{d:dist(S.pos,p),b:bearing(S.pos,p)}); L.hidden=true; });
+  say(n.slice(0,5).map(x=>x.p.nome+', a '+Math.round(x.d)+' metros para '+card(x.b)).join('. ')+'.');
+};
+$('#btnDay').onclick=()=>{
+  const L=$('#list'); L.hidden=false;
+  const city=S.pos?cityOf(S.pos):null; const today=dayKey(Date.now());
+  const plan=S.plan?S.plan.itens.filter(i=>i.dia===today):[];
+  const pts=S.pois.filter(p=>!city||p.cidade===city);
+  L.innerHTML='<div class="eyebrow">Briefing · '+dayLabel(today)+(city?' · '+esc(city):'')+'</div>'+
+    plan.map(i=>'<div class="row'+(i.status==='feito'?' done':'')+'"><div><b>'+esc(i.hora)+' '+esc(i.titulo)+'</b><span>'+esc((i.detalhes||'').slice(0,90))+'</span></div></div>').join('')+
+    (pts.length?'<div class="eyebrow" style="margin-top:10px">Pontos da base em '+esc(city||'todas as cidades')+'</div>':'')+pts.slice(0,40).map(p=>'<div class="row'+(notNarratedRecently(p.id)?'':' done')+'"><div><b>'+esc(p.nome)+'</b><span>'+esc(p.dica||'')+'</span></div><button class="small" data-id="'+p.id+'">Ouvir</button></div>').join('');
+  L.querySelectorAll('button').forEach(b=>b.onclick=()=>{ const p=S.pois.find(q=>q.id===b.dataset.id); if(p) narrate(p,null,{silentMark:true}); L.hidden=true; });
+  const txt=plan.length?('Roteiro de hoje. '+plan.map(i=>i.hora.replace(':',' e ')+': '+i.titulo).join('. ')+'.'):('Sem roteiro para hoje. '+pts.filter(p=>p.dica).slice(0,6).map(p=>p.nome+': '+p.dica).join('. '));
+  say(txt);
+};
+
+/* ---------- ajustes ---------- */
+function bindSettings(){
+  const s=S.settings;
+  $('#setAuto').checked=s.auto; $('#setRaio').value=s.raio; $('#setRate').value=s.rate; $('#setRep').value=s.rep; $('#setStay').value=s.stay; $('#setDiaryAuto').checked=s.diaryAuto; $('#setGeocode').checked=s.geocode; $('#setModel').value=s.model||''; $('#setKey').value=S.apiKey;
+  const lbl=()=>{ $('#lblRaio').textContent='+'+s.raio+' m'; $('#lblRate').textContent=s.rate.toFixed(1)+'×'; $('#lblRep').textContent=s.rep+' h'; $('#lblStay').textContent=s.stay+' min'; };
+  lbl();
+  const upd=()=>{ s.auto=$('#setAuto').checked; s.raio=+$('#setRaio').value; s.rate=+$('#setRate').value; s.rep=+$('#setRep').value; s.stay=+$('#setStay').value; s.diaryAuto=$('#setDiaryAuto').checked; s.geocode=$('#setGeocode').checked; s.voice=$('#setVoice').value; s.model=$('#setModel').value.trim()||'claude-sonnet-4-5'; store('guia.settings',s); lbl(); pickVoice(); };
+  ['#setAuto','#setRaio','#setRate','#setRep','#setStay','#setDiaryAuto','#setGeocode','#setVoice','#setModel'].forEach(id=>$(id).addEventListener('input',upd));
+  $('#setKey').addEventListener('input',()=>{ S.apiKey=$('#setKey').value.trim(); try{ localStorage.setItem('guia.apikey',S.apiKey); }catch(e){} });
+  $('#btnTestVoice').onclick=()=>say('Teste de voz. Você está ouvindo o Guia de Bolso na velocidade '+s.rate.toFixed(1)+'.');
+  $('#btnResetDone').onclick=()=>{ S.done.clear(); saveDone(); refreshCounts(); toast('Lista de narrados zerada.'); };
+  $('#btnBackup').onclick=async()=>{ const data={version:VERSION,exported:new Date().toISOString(),diary:S.diary,track:S.track,plan:S.plan,photos:S.photos}; shareOrDownload('guia-backup-'+dayKey(Date.now())+'.json',JSON.stringify(data),'application/json','Backup do Guia'); };
+  $('#btnRestore').onclick=()=>$('#fileRestore').click();
+  $('#fileRestore').onchange=ev=>{ const f=ev.target.files[0]; ev.target.value=''; if(!f) return; f.text().then(async t=>{ try{ const d=JSON.parse(t); let n=0; if(Array.isArray(d.diary)){ const ids=new Set(S.diary.map(e=>e.id)); d.diary.forEach(e=>{ if(!ids.has(e.id)){ S.diary.push(e); n++; } }); saveDiary(); } if(d.plan&&!S.plan){ S.plan=normalizePlan(d.plan); savePlan(); } if(Array.isArray(d.photos)){ const ids=new Set(S.photos.map(p=>p.id)); for(const p of d.photos){ if(!ids.has(p.id)){ await DB.put(p); S.photos.push(p); n++; } } } renderDiary(); toast('Backup restaurado: '+n+' itens novos.'); }catch(e){ toast('Arquivo inválido.'); } }); };
+  $('#btnPlan').onclick=()=>$('#filePlan').click();
+  $('#filePlan').onchange=ev=>{ const f=ev.target.files[0]; ev.target.value=''; if(!f) return; f.text().then(t=>{ try{ const d=JSON.parse(t); if(!Array.isArray(d.itens)) throw 0; const old=S.plan; S.plan=normalizePlan(d); if(old){ old.itens.forEach(o=>{ const m=S.plan.itens.find(i=>i.id===o.id); if(m){ m.status=o.status; m.entryId=o.entryId; } }); } savePlan(); renderDiary(); toast('Roteiro importado: '+S.plan.itens.length+' itens, '+S.plan.hoteis.length+' hotéis.'); }catch(e){ toast('Arquivo de roteiro inválido.'); } }); };
+  $('#btnPlanDel').onclick=()=>{ if(!S.plan) return; if(window.confirm('Remover o roteiro deste aparelho? (o diário continua)')){ S.plan=null; try{localStorage.removeItem('guia.plan');}catch(e){} refreshCounts(); renderDiary(); } };
+}
+bindSettings(); loadPhotos().then(()=>{ renderDiary(); refreshCounts(); });
+
+setInterval(()=>{ if(S.open&&$('#tab-diario').classList.contains('active')) renderDiary(); },60000);
+
+/* ---------- offline ---------- */
+if('serviceWorker' in navigator){ navigator.serviceWorker.register('sw.js').catch(()=>{}); }
+})();
+</script>
+</body>
+</html>
