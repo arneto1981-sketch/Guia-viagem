@@ -178,6 +178,7 @@ footer{font-size:12px;color:var(--muted);padding-bottom:8px}
   <div class="grid">
     <button id="btnPlan">Importar roteiro (JSON)</button>
     <button id="btnPlanDel">Remover roteiro</button>
+    <button id="btnPlanUndoAuto">Reabrir itens marcados automaticamente</button>
     <button id="btnTestVoice">Testar voz</button>
     <button id="btnResetDone">Zerar "já narrados"</button>
     <button id="btnBackup">Backup completo (JSON)</button>
@@ -194,7 +195,7 @@ footer{font-size:12px;color:var(--muted);padding-bottom:8px}
 (function(){
 'use strict';
 const $=s=>document.querySelector(s), $$=s=>Array.from(document.querySelectorAll(s));
-const VERSION='2.4';
+const VERSION='2.5';
 const S={pois:[],pos:null,watch:null,speaking:false,last:null,active:false,wake:null,done:new Map(),
          settings:{auto:true,raio:0,rate:1,voice:'',rep:6,stay:12,diaryAuto:true,geocode:true,model:'claude-sonnet-4-5'},
          diary:[],track:[],cand:null,open:null,away:null,day:null,geoCache:{},plan:null,photos:[],apiKey:'',route:null,lastGuide:{t:0,d:1e9},heading:null};
@@ -326,14 +327,14 @@ document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==
 /* ---------- ROTEIRO (privado: fica só neste aparelho) ---------- */
 function normalizePlan(p){
   const plan={titulo:p.titulo||'Roteiro',hoteis:(p.hoteis||[]).filter(h=>isFinite(h.lat)&&isFinite(h.lon)),itens:[]};
-  (p.itens||[]).forEach((it,i)=>{ plan.itens.push({id:it.id||('p'+it.dia+'-'+pad(i)),dia:it.dia,hora:it.hora||'',titulo:it.titulo||'',tipo:it.tipo||'visita',lat:it.lat,lon:it.lon,detalhes:it.detalhes||'',status:it.status||'planejado',entryId:it.entryId||null,nota:it.nota||'',pois:Array.isArray(it.pois)?it.pois:null}); });
+  (p.itens||[]).forEach((it,i)=>{ plan.itens.push({id:it.id||('p'+it.dia+'-'+pad(i)),dia:it.dia,hora:it.hora||'',titulo:it.titulo||'',tipo:it.tipo||'visita',lat:it.lat,lon:it.lon,detalhes:it.detalhes||'',status:it.status||'planejado',entryId:it.entryId||null,nota:it.nota||'',auto:!!it.auto,pois:Array.isArray(it.pois)?it.pois:null}); });
   return plan;
 }
 function planTime(it){ const [y,m,d]=it.dia.split('-'); const [h,mi]=(it.hora||'00:00').split(':'); return new Date(+y,+m-1,+d,+h||0,+mi||0).getTime(); }
 function matchPlan(e){ // casa um registro do diário com um item planejado do mesmo dia num raio de 150 m
   if(!S.plan) return null; const day=dayKey(e.start);
-  const c=S.plan.itens.filter(it=>it.dia===day&&it.status==='planejado'&&isFinite(it.lat)&&dist(it,e)<=150).sort((a,b)=>Math.abs(planTime(a)-e.start)-Math.abs(planTime(b)-e.start))[0];
-  if(c){ c.status='feito'; c.entryId=e.id; e.planId=c.id; if(!e.place) e.place=c.titulo; if(c.tipo in TYPES) e.type=c.tipo; savePlan(); toast('✓ Roteiro: '+c.titulo); }
+  const c=S.plan.itens.filter(it=>it.dia===day&&it.status==='planejado'&&isFinite(it.lat)&&dist(it,e)<=120&&Math.abs(planTime(it)-e.start)<=150*60000).sort((a,b)=>Math.abs(planTime(a)-e.start)-Math.abs(planTime(b)-e.start))[0];
+  if(c){ c.status='feito'; c.auto=true; c.entryId=e.id; e.planId=c.id; if(!e.place) e.place=c.titulo; if(c.tipo in TYPES) e.type=c.tipo; savePlan(); toast('✓ Roteiro: '+c.titulo+' (automático — toque em Reabrir se não fez)'); }
   return c;
 }
 
@@ -435,7 +436,7 @@ function renderDiary(){
   if(!items.length){ box.innerHTML='<div class="eyebrow">'+dayLabel(S.day)+'</div><p>Nenhum registro ainda. As paradas de mais de '+S.settings.stay+' min entram sozinhas; o botão abaixo registra agora.</p>'; return; }
   box.innerHTML='<div class="eyebrow">'+dayLabel(S.day)+' · '+items.length+' itens'+(city?' · '+city:'')+'</div>'+items.map(x=>{
     if(x.k==='p'){ const i=x.i; const linked=i.entryId?S.diary.find(e=>e.id===i.entryId):null;
-      return '<div class="entry plan '+i.status+'" data-plan="'+i.id+'"><div class="top"><div class="place">'+(i.status==='feito'?'✓ ':i.status==='pulado'?'— ':'◻ ')+esc(i.titulo)+'</div><div class="time">'+esc(i.hora)+' · '+esc(TYPES[i.tipo]||i.tipo)+'</div></div>'+
+      return '<div class="entry plan '+i.status+'" data-plan="'+i.id+'"><div class="top"><div class="place">'+(i.status==='feito'?'✓ ':i.status==='pulado'?'— ':'◻ ')+esc(i.titulo)+'</div><div class="time">'+esc(i.hora)+' · '+esc(TYPES[i.tipo]||i.tipo)+(i.status==='feito'&&i.auto?' · auto':'')+'</div></div>'+
         (i.detalhes?'<div class="det">'+esc(i.detalhes)+'</div>':'')+(linked?'<div class="meta">registrado '+hm(linked.start)+'–'+hm(linked.end)+(linked.place?' · '+esc(linked.place):'')+'</div>':'')+
         '<div class="editform" data-edit hidden><div class="r"><input type="time" value="'+esc(i.hora)+'" data-f="hora"><input type="text" value="'+esc(i.titulo)+'" data-f="titulo" placeholder="Título"></div><textarea data-f="detalhes" placeholder="Detalhes">'+esc(i.detalhes)+'</textarea><div class="chips">'+Object.entries(TYPES).map(([k,v])=>'<button class="chip" data-ptype="'+k+'" aria-pressed="'+(i.tipo===k)+'">'+v+'</button>').join('')+'</div><div class="chips"><button class="chip ok" data-act="save">Salvar</button><button class="chip" data-act="cancel">Cancelar</button><button class="chip" data-act="delplan">Apagar item</button></div></div>'+
         '<div class="chips" data-actions>'+(i.status!=='feito'?'<button class="chip ok" data-act="feito">Feito</button>':'<button class="chip" data-act="reabrir">Reabrir</button>')+'<button class="chip" data-act="edit">Editar</button>'+(i.status==='planejado'?'<button class="chip" data-act="pular">Pular</button>':'')+(isFinite(i.lat)?'<button class="chip" data-act="ir">Como chegar</button>':'')+'<button class="chip" data-act="ouvir">Ouvir</button></div></div>'; }
@@ -470,8 +471,8 @@ function renderDiary(){
   box.querySelectorAll('.entry[data-plan]').forEach(el=>{
     const i=S.plan.itens.find(x=>x.id===el.dataset.plan);
     const act=a=>el.querySelector('[data-act='+a+']');
-    if(act('feito')) act('feito').onclick=()=>{ i.status='feito'; if(!i.entryId){ const now=Date.now(); const e={id:'e'+now,start:now-600000,end:now,lat:S.pos?+S.pos.lat.toFixed(5):i.lat,lon:S.pos?+S.pos.lon.toFixed(5):i.lon,place:i.titulo,poiId:null,type:(i.tipo in TYPES)?i.tipo:'visita',note:'',auto:false,city:cityOf(S.pos||i)||'',planId:i.id}; S.diary.push(e); i.entryId=e.id; saveDiary(); } savePlan(); renderDiary(); };
-    if(act('reabrir')) act('reabrir').onclick=()=>{ i.status='planejado'; savePlan(); renderDiary(); };
+    if(act('feito')) act('feito').onclick=()=>{ i.status='feito'; i.auto=false; if(!i.entryId){ const now=Date.now(); const e={id:'e'+now,start:now-600000,end:now,lat:S.pos?+S.pos.lat.toFixed(5):i.lat,lon:S.pos?+S.pos.lon.toFixed(5):i.lon,place:i.titulo,poiId:null,type:(i.tipo in TYPES)?i.tipo:'visita',note:'',auto:false,city:cityOf(S.pos||i)||'',planId:i.id}; S.diary.push(e); i.entryId=e.id; saveDiary(); } savePlan(); renderDiary(); };
+    if(act('reabrir')) act('reabrir').onclick=()=>{ i.status='planejado'; i.auto=false; if(i.entryId){ const e=S.diary.find(x=>x.id===i.entryId); if(e) e.planId=null; i.entryId=null; } savePlan(); saveDiary(); renderDiary(); };
     if(act('pular')) act('pular').onclick=()=>{ i.status='pulado'; savePlan(); renderDiary(); };
     if(act('ir')) act('ir').onclick=()=>window.open('https://www.google.com/maps/dir/?api=1&destination='+i.lat+','+i.lon+'&travelmode=walking','_blank');
     act('ouvir').onclick=()=>say(i.hora+'. '+i.titulo+'. '+(i.detalhes||''));
@@ -544,7 +545,7 @@ function routeTick(now){
   const d=dist(S.pos,t), b=bearing(S.pos,t);
   if(d<=t.raio+S.settings.raio+Math.min(S.pos.acc||0,30)*0.5){
     if(t.poi){ if(notNarratedRecently(t.poi.id)) narrate(t.poi,{d,b}); else { S.route.i++; announceNext(true); } }
-    else { if(t.plan){ t.plan.status='feito'; savePlan(); } S.route.i++; say('Você chegou: '+t.nome+'.',()=>announceNext(true)); }
+    else { S.route.i++; say('Você chegou: '+t.nome+'. Marque como feito no diário quando terminar.',()=>announceNext(true)); }
     return;
   }
   const g=S.lastGuide; if(now-g.t>75000||Math.abs(g.d-d)>120){ S.lastGuide={t:now,d}; say(t.nome+', '+Math.round(d)+' metros, '+relDir(b)+'.'); renderRoute(); }
@@ -697,7 +698,8 @@ function bindSettings(){
   $('#btnRestore').onclick=()=>$('#fileRestore').click();
   $('#fileRestore').onchange=ev=>{ const f=ev.target.files[0]; ev.target.value=''; if(!f) return; f.text().then(async t=>{ try{ const d=JSON.parse(t); let n=0; if(Array.isArray(d.diary)){ const ids=new Set(S.diary.map(e=>e.id)); d.diary.forEach(e=>{ if(!ids.has(e.id)){ S.diary.push(e); n++; } }); saveDiary(); } if(d.plan&&!S.plan){ S.plan=normalizePlan(d.plan); savePlan(); } if(Array.isArray(d.photos)){ const ids=new Set(S.photos.map(p=>p.id)); for(const p of d.photos){ if(!ids.has(p.id)){ await DB.put(p); S.photos.push(p); n++; } } } renderDiary(); toast('Backup restaurado: '+n+' itens novos.'); }catch(e){ toast('Arquivo inválido.'); } }); };
   $('#btnPlan').onclick=()=>$('#filePlan').click();
-  $('#filePlan').onchange=ev=>{ const f=ev.target.files[0]; ev.target.value=''; if(!f) return; f.text().then(t=>{ try{ const d=JSON.parse(t); if(!Array.isArray(d.itens)) throw 0; const old=S.plan; S.plan=normalizePlan(d); if(old){ old.itens.forEach(o=>{ const m=S.plan.itens.find(i=>i.id===o.id); if(m){ m.status=o.status; m.entryId=o.entryId; } }); } savePlan(); renderDiary(); toast('Roteiro importado: '+S.plan.itens.length+' itens, '+S.plan.hoteis.length+' hotéis.'); }catch(e){ toast('Arquivo de roteiro inválido.'); } }); };
+  $('#filePlan').onchange=ev=>{ const f=ev.target.files[0]; ev.target.value=''; if(!f) return; f.text().then(t=>{ try{ const d=JSON.parse(t); if(!Array.isArray(d.itens)) throw 0; const old=S.plan; S.plan=normalizePlan(d); if(old){ old.itens.forEach(o=>{ const m=S.plan.itens.find(i=>i.id===o.id); if(m){ m.status=o.status; m.entryId=o.entryId; m.auto=!!o.auto; } }); } savePlan(); renderDiary(); toast('Roteiro importado: '+S.plan.itens.length+' itens, '+S.plan.hoteis.length+' hotéis.'); }catch(e){ toast('Arquivo de roteiro inválido.'); } }); };
+  $('#btnPlanUndoAuto').onclick=()=>{ if(!S.plan) return; let n=0; S.plan.itens.forEach(i=>{ if(i.status==='feito'&&i.auto){ i.status='planejado'; i.auto=false; if(i.entryId){ const e=S.diary.find(x=>x.id===i.entryId); if(e) e.planId=null; i.entryId=null; } n++; } }); savePlan(); saveDiary(); renderDiary(); toast(n+' itens reabertos.'); };
   $('#btnPlanDel').onclick=()=>{ if(!S.plan) return; if(window.confirm('Remover o roteiro deste aparelho? (o diário continua)')){ S.plan=null; try{localStorage.removeItem('guia.plan');}catch(e){} refreshCounts(); renderDiary(); } };
 }
 bindSettings(); loadPhotos().then(()=>{ renderDiary(); refreshCounts(); });
