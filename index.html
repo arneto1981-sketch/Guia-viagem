@@ -87,7 +87,11 @@ label.setting input[type=password],label.setting input[type=text]{width:55%}
 footer{font-size:12px;color:var(--muted);padding-bottom:8px}
 .toast{position:fixed;left:50%;bottom:calc(16px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--fg);color:var(--bg);padding:10px 14px;border-radius:12px;font-size:14px;opacity:0;pointer-events:none;transition:opacity .2s;max-width:90vw;z-index:9}
 .toast.show{opacity:1}
-#map{flex:1;min-height:300px;border-radius:14px;background:#0e1830}
+#mapwrap{flex:1;min-height:300px;border-radius:14px;overflow:hidden;position:relative;background:#0e1830}
+#map{position:absolute;inset:0;transition:transform .35s ease}
+#mapwrap.follow #map{pointer-events:none}
+#compass{position:absolute;top:10px;right:10px;z-index:5;background:rgba(20,33,61,.85);color:#fff;border-radius:999px;width:44px;height:44px;display:flex;align-items:center;justify-content:center;font-size:22px;transition:transform .35s}
+#mapwrap.follow #compass{background:#f2b134;color:#1a1a1a}
 .leaflet-popup-content{font:14px/1.4 var(--font);color:#1a1a1a}.leaflet-popup-content b{font-size:15px}.leaflet-popup-content button{min-height:32px;padding:4px 10px;font-size:13px;border-radius:8px;margin-top:6px;background:#f2b134;color:#1a1a1a}
 .leaflet-container{font:12px var(--font)}
 .daysel{display:flex;gap:6px;overflow:auto;padding-bottom:4px}
@@ -128,6 +132,7 @@ footer{font-size:12px;color:var(--muted);padding-bottom:8px}
     <button id="btnPhoto">📷 Foto do lugar</button>
     <button id="btnStop">Parar</button>
     <button id="btnSkip" hidden>Pular ponto da rota</button>
+    <button id="btnReorder2" hidden>Reordenar por proximidade</button>
     <button id="btnMaps" hidden>Abrir rota no Maps</button>
     <input type="file" id="filePhoto" accept="image/*" capture="environment" hidden>
   </div>
@@ -135,10 +140,12 @@ footer{font-size:12px;color:var(--muted);padding-bottom:8px}
 
 <!-- ===================== MAPA ===================== -->
 <section class="tab" id="tab-mapa">
-  <div id="map"></div>
+  <div id="mapwrap"><div id="map"></div><div id="compass" title="Norte">↑</div></div>
   <div class="grid">
-    <button class="primary" id="btnMapMe">Centralizar em mim</button>
+    <button class="primary" id="btnFollow">Seguir direção</button>
+    <button id="btnMapMe">Centralizar em mim</button>
     <button id="btnMapRoute">Ver rota do dia</button>
+    <button id="btnReorder">Reordenar por proximidade</button>
   </div>
 </section>
 
@@ -187,10 +194,10 @@ footer{font-size:12px;color:var(--muted);padding-bottom:8px}
 (function(){
 'use strict';
 const $=s=>document.querySelector(s), $$=s=>Array.from(document.querySelectorAll(s));
-const VERSION='2.3';
+const VERSION='2.4';
 const S={pois:[],pos:null,watch:null,speaking:false,last:null,active:false,wake:null,done:new Map(),
          settings:{auto:true,raio:0,rate:1,voice:'',rep:6,stay:12,diaryAuto:true,geocode:true,model:'claude-sonnet-4-5'},
-         diary:[],track:[],cand:null,open:null,away:null,day:null,geoCache:{},plan:null,photos:[],apiKey:'',route:null,lastGuide:{t:0,d:1e9}};
+         diary:[],track:[],cand:null,open:null,away:null,day:null,geoCache:{},plan:null,photos:[],apiKey:'',route:null,lastGuide:{t:0,d:1e9},heading:null};
 
 /* ---------- utilidades ---------- */
 const esc=s=>String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
@@ -290,6 +297,7 @@ function onPos(ev){
   const c=ev.coords; const now=ev.timestamp||Date.now();
   if(c.accuracy>150){ $('#gps').textContent='GPS fraco ±'+Math.round(c.accuracy)+' m'; $('#gps').className='bad'; return; }
   S.pos={lat:c.latitude,lon:c.longitude,acc:c.accuracy,t:now};
+  if(isFinite(c.heading)&&c.heading!=null&&(c.speed==null||c.speed>0.4)) S.heading=c.heading;
   const g=$('#gps'); g.textContent='GPS ±'+Math.round(c.accuracy)+' m'; g.className=c.accuracy<=40?'ok':'bad';
   const city=cityOf(S.pos); if(city) $('#cidade').textContent=city;
   const lastT=S.track[S.track.length-1];
@@ -514,7 +522,8 @@ function buildRoute(){
   const pending=targets.filter(t=>!(t.poi&&!notNarratedRecently(t.poi.id)));
   return pending;
 }
-function heading(){ // direção do movimento pelos últimos pontos da trilha (> 12 m)
+function heading(){ if(S.heading!=null&&Date.now()-S.pos.t<20000) return S.heading; // rumo do GPS quando há
+  // direção do movimento pelos últimos pontos da trilha (> 12 m)
   const tr=S.track; if(tr.length<2) return null; const last=tr[tr.length-1];
   for(let i=tr.length-2;i>=Math.max(0,tr.length-8);i--){ if(dist(tr[i],last)>12&&last.t-tr[i].t<240000) return bearing(tr[i],last); }
   return null;
@@ -524,7 +533,7 @@ function routeTarget(){ if(!S.route) return null; while(S.route.i<S.route.target
 function routeAdvanceIfArrived(p){ const t=routeTarget(); if(t&&t.poi&&t.poi.id===p.id) S.route.i++; }
 function announceNext(spoken){
   const t=routeTarget(); renderRoute();
-  if(!t){ if(spoken) say('Fim da rota de hoje. Toque em Rota do dia para montar outra.'); S.route=null; $('#btnSkip').hidden=true; $('#btnMaps').hidden=true; renderRoute(); return; }
+  if(!t){ if(spoken) say('Fim da rota de hoje. Toque em Rota do dia para montar outra.'); S.route=null; $('#btnSkip').hidden=true; $('#btnMaps').hidden=true; $('#btnReorder2').hidden=true; renderRoute(); return; }
   if(!S.pos) return;
   const d=Math.round(dist(S.pos,t)), b=bearing(S.pos,t);
   S.lastGuide={t:Date.now(),d};
@@ -551,14 +560,22 @@ function mapsRouteURL(){ if(!S.route) return null; const rest=S.route.targets.sl
 $('#btnRoute').onclick=async()=>{
   if(!startGeo()) return; if(!S.active){ S.active=true; await wakeOn(); $('#btnStart').textContent='Guia ligado'; $('#btnStart').disabled=true; }
   const targets=buildRoute(); if(!targets.length){ toast('Sem pontos pendentes para hoje (ou ainda sem GPS).'); return; }
-  S.route={targets,i:0}; $('#btnSkip').hidden=false; $('#btnMaps').hidden=false; renderRoute();
+  S.route={targets,i:0}; $('#btnSkip').hidden=false; $('#btnMaps').hidden=false; $('#btnReorder2').hidden=false; renderRoute();
   if(S.pos) announceNext(true); else say('Rota montada com '+targets.length+' pontos. Aguardando o GPS.');
 };
+function reorderRoute(){
+  if(!S.route||!S.pos){ toast('Monte a Rota do dia primeiro (com GPS).'); return; }
+  const done=S.route.targets.slice(0,S.route.i); let rest=S.route.targets.slice(S.route.i).filter(t=>!(t.poi&&!notNarratedRecently(t.poi.id))&&!(t.plan&&t.plan.status!=='planejado'));
+  const out=[]; let cur=S.pos;
+  while(rest.length){ rest.sort((a,b)=>dist(cur,a)-dist(cur,b)); const n=rest.shift(); out.push(n); cur=n; }
+  S.route={targets:done.concat(out),i:done.length}; M.routeKey=''; renderRoute(); announceNext(true); toast('Rota reordenada a partir de onde você está.');
+}
+$('#btnReorder').onclick=reorderRoute; $('#btnReorder2').onclick=reorderRoute;
 $('#btnSkip').onclick=()=>{ if(!S.route) return; const t=routeTarget(); if(t){ S.route.i++; toast('Pulado: '+t.nome); } announceNext(true); };
 $('#btnMaps').onclick=()=>{ const u=mapsRouteURL(); if(u) window.open(u,'_blank'); else toast('Rota concluída.'); };
 
 /* ---------- MAPA (Leaflet + OpenStreetMap; caminho a pé via roteador OSRM do OSM) ---------- */
-const M={map:null,me:null,acc:null,layer:null,route:null,marks:{},routeKey:'',next:null};
+const M={map:null,me:null,acc:null,layer:null,route:null,marks:{},routeKey:'',next:null,trail:null,follow:false};
 function showMap(){
   if(!window.L){ toast('Mapa indisponível sem internet.'); return; }
   if(!M.map){
@@ -568,9 +585,25 @@ function showMap(){
     const c=S.pos||(S.pois[0]?{lat:S.pois[0].lat,lon:S.pois[0].lon}:{lat:38.7108,lon:-9.1432});
     M.map.setView([c.lat,c.lon],S.pos?16:14);
     mapMarkers(); mapPos(); mapRoute();
+    M.map.on('dragstart',()=>{ if(M.follow) setFollow(false); });
   }
   setTimeout(()=>{ M.map.invalidateSize(); },60);
 }
+function mapTrail(){
+  if(!M.map) return; const today=dayKey(Date.now()); const pts=S.track.filter(t=>dayKey(t.t)===today).map(t=>[t.lat,t.lon]);
+  if(pts.length<2){ return; }
+  if(!M.trail) M.trail=L.polyline(pts,{color:'#9aa4bd',weight:4,opacity:.7,dashArray:'2 6'}).addTo(M.map); else M.trail.setLatLngs(pts);
+}
+function setFollow(on){
+  M.follow=on; const w=$('#mapwrap'); w.classList.toggle('follow',on); $('#btnFollow').textContent=on?'Parar de seguir':'Seguir direção';
+  if(!on){ $('#map').style.transform=''; $('#compass').style.transform=''; if(M.map) setTimeout(()=>M.map.invalidateSize(),50); }
+  else if(S.pos&&M.map){ M.map.setView([S.pos.lat,S.pos.lon],17,{animate:false}); applyRotation(); }
+}
+function applyRotation(){
+  if(!M.follow) return; const h=heading(); const deg=h==null?0:-h;
+  $('#map').style.transform='rotate('+deg+'deg) scale(1.45)'; $('#compass').style.transform='rotate('+deg+'deg)';
+}
+$('#btnFollow').onclick=()=>{ if(!S.pos){ startGeo(); toast('Aguardando GPS…'); } setFollow(!M.follow); };
 function mapMarkers(){
   if(!M.map) return;
   M.layer.clearLayers(); M.marks={};
@@ -591,6 +624,8 @@ function mapPos(){
   const ll=[S.pos.lat,S.pos.lon];
   if(!M.me){ M.me=L.circleMarker(ll,{radius:9,color:'#fff',fillColor:'#2f80ed',fillOpacity:1,weight:3}).addTo(M.map); M.acc=L.circle(ll,{radius:S.pos.acc||0,color:'#2f80ed',weight:1,fillOpacity:.08}).addTo(M.map); M.map.setView(ll,16); }
   else { M.me.setLatLng(ll); M.acc.setLatLng(ll); M.acc.setRadius(S.pos.acc||0); }
+  mapTrail();
+  if(M.follow){ M.map.setView(ll,M.map.getZoom(),{animate:false}); applyRotation(); }
 }
 async function mapRoute(){
   if(!M.map) return;
@@ -622,7 +657,7 @@ $('#btnStart').onclick=async()=>{
   say('Guia ligado. '+(S.pois.length?'':'Sem pontos carregados.'));
   $('#btnStart').textContent='Guia ligado'; $('#btnStart').disabled=true;
 };
-$('#btnStop').onclick=()=>{ S.active=false; S.route=null; $('#btnSkip').hidden=true; $('#btnMaps').hidden=true; try{speechSynthesis.cancel();}catch(e){} S.speaking=false; $('#btnStart').textContent='Iniciar guia'; $('#btnStart').disabled=false; $('#now').innerHTML='<div class="eyebrow">Pausado</div><h2>Guia parado</h2><p>O diário continua registrando paradas enquanto o app estiver aberto. Toque em Iniciar para voltar a narrar.</p>'; };
+$('#btnStop').onclick=()=>{ S.active=false; S.route=null; $('#btnSkip').hidden=true; $('#btnMaps').hidden=true; $('#btnReorder2').hidden=true; try{speechSynthesis.cancel();}catch(e){} S.speaking=false; $('#btnStart').textContent='Iniciar guia'; $('#btnStart').disabled=false; $('#now').innerHTML='<div class="eyebrow">Pausado</div><h2>Guia parado</h2><p>O diário continua registrando paradas enquanto o app estiver aberto. Toque em Iniciar para voltar a narrar.</p>'; };
 $('#btnRepeat').onclick=()=>{ if(S.last) narrate(S.last,S.pos?{d:dist(S.pos,S.last),b:bearing(S.pos,S.last)}:null,{silentMark:true}); else toast('Nada narrado ainda.'); };
 $('#btnRefresh').onclick=refreshGeo;
 $('#btnNear').onclick=()=>{
