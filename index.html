@@ -130,6 +130,7 @@ footer{font-size:12px;color:var(--muted);padding-bottom:8px}
     <button id="btnRepeat">Repetir</button>
     <button id="btnDay">Briefing do dia</button>
     <button id="btnPhoto">📷 Foto do lugar</button>
+    <button id="btnAsk">🎤 Pergunte ao guia</button>
     <button id="btnStop">Parar</button>
     <button id="btnSkip" hidden>Pular ponto da rota</button>
     <button id="btnReorder2" hidden>Reordenar por proximidade</button>
@@ -158,6 +159,7 @@ footer{font-size:12px;color:var(--muted);padding-bottom:8px}
     <button id="btnPhoto2">📷 Foto</button>
     <button id="btnExport">Exportar dia (texto)</button>
     <button id="btnPlaybook">Playbook (HTML c/ fotos)</button>
+    <button class="full" id="btnSummary">✍️ Resumo do dia (IA)</button>
   </div>
 </section>
 
@@ -165,6 +167,7 @@ footer{font-size:12px;color:var(--muted);padding-bottom:8px}
 <section class="tab" id="tab-ajustes">
   <div class="panel scroll">
     <label class="setting"><span>Narrar automaticamente ao entrar no raio</span><input type="checkbox" id="setAuto" checked></label>
+    <label class="setting"><span>Narração completa (inclui o "Saiba mais", ~3 min por ponto)</span><input type="checkbox" id="setLong" checked></label>
     <label class="setting"><span>Raio extra de disparo <b id="lblRaio">+0 m</b></span><input type="range" id="setRaio" min="0" max="80" step="10" value="0"></label>
     <label class="setting"><span>Velocidade da voz <b id="lblRate">1.0×</b></span><input type="range" id="setRate" min="0.8" max="1.4" step="0.1" value="1"></label>
     <label class="setting"><span>Voz</span><select id="setVoice"></select></label>
@@ -196,10 +199,10 @@ footer{font-size:12px;color:var(--muted);padding-bottom:8px}
 (function(){
 'use strict';
 const $=s=>document.querySelector(s), $$=s=>Array.from(document.querySelectorAll(s));
-const VERSION='2.6';
+const VERSION='2.7';
 const S={pois:[],pos:null,watch:null,speaking:false,last:null,active:false,wake:null,done:new Map(),
-         settings:{auto:true,raio:0,rate:1,voice:'',rep:6,stay:12,diaryAuto:true,geocode:true,model:'claude-sonnet-5-5'},
-         diary:[],track:[],cand:null,open:null,away:null,day:null,geoCache:{},plan:null,photos:[],apiKey:'',route:null,lastGuide:{t:0,d:1e9},heading:null};
+         settings:{auto:true,raio:0,rate:1,voice:'',rep:6,stay:12,diaryAuto:true,geocode:true,model:'claude-sonnet-5-5',long:true},
+         diary:[],track:[],cand:null,open:null,away:null,day:null,geoCache:{},plan:null,photos:[],apiKey:'',route:null,lastGuide:{t:0,d:1e9},heading:null,qa:[],summaries:{}};
 
 /* ---------- utilidades ---------- */
 const esc=s=>String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
@@ -223,7 +226,7 @@ async function shareOrDownload(name,content,type,title){ if(navigator.share){ tr
 
 /* ---------- estado persistido ---------- */
 Object.assign(S.settings, load('guia.settings',{})); if(!S.settings.model||/^claude-sonnet-4/.test(S.settings.model)) S.settings.model='claude-sonnet-5-5';
-S.diary=load('guia.diary',[]); S.track=load('guia.track',[]); S.geoCache=load('guia.geocache',{}); S.plan=load('guia.plan',null);
+S.diary=load('guia.diary',[]); S.track=load('guia.track',[]); S.geoCache=load('guia.geocache',{}); S.plan=load('guia.plan',null); S.qa=load('guia.qa',[]); S.summaries=load('guia.summaries',{});
 try{ S.apiKey=localStorage.getItem('guia.apikey')||''; }catch(e){}
 (function(){ const d=load('guia.done',{}); Object.entries(d).forEach(([k,t])=>S.done.set(k,t)); })();
 function saveDone(){ const o={}; S.done.forEach((t,k)=>o[k]=t); store('guia.done',o); }
@@ -285,7 +288,8 @@ function narrate(p,info,opts){
     '<p class="meta">'+esc(p.cidade)+(p.fontes&&p.fontes.length?' · fontes: '+p.fontes.map(f=>'<a href="'+esc(f)+'" target="_blank" rel="noopener" style="color:inherit">'+esc(String(f).replace(/^https?:\/\//,'').split('/')[0])+'</a>').join(', '):'')+'</p>';
   $('#now').scrollTop=0;
   const bm=$('#btnMais'); if(bm) bm.onclick=()=>{ $('#mais').hidden=false; bm.textContent='Lendo…'; say(p.saiba_mais,()=>{bm.textContent='Saiba mais (ouvir de novo)';}); };
-  const txt=p.nome+'. '+p.narracao+(p.dica?' Dica: '+p.dica:'');
+  const txt=p.nome+'. '+p.narracao+(S.settings.long!==false&&p.saiba_mais?' '+p.saiba_mais:'')+(p.dica?' Dica: '+p.dica:'');
+  if(S.settings.long!==false&&p.saiba_mais){ const mm=$('#mais'); if(mm) mm.hidden=false; const bb=$('#btnMais'); if(bb) bb.hidden=true; }
   say(txt, ()=>{ if(!S.active||!S.pos) return; if(S.route){ routeAdvanceIfArrived(p); announceNext(true); return; } const nx=nearby(400).filter(x=>x.p.id!==p.id&&notNarratedRecently(x.p.id))[0]; if(nx) say('Perto daqui, a '+Math.round(nx.d)+' metros para '+card(nx.b)+': '+nx.p.nome+'.'); });
 }
 function checkTrigger(){
@@ -383,6 +387,57 @@ async function geocode(e){
   }catch(err){ if(!e.place){ e.place=key; saveDiary(); renderDiary(); } }
 }
 
+/* ---------- IA: chamada genérica ---------- */
+async function askClaude(content,max){
+  if(!S.apiKey) throw new Error('Cole a chave da API em Ajustes.');
+  if(!navigator.onLine) throw new Error('Sem internet agora.');
+  const r=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'content-type':'application/json','x-api-key':S.apiKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
+    body:JSON.stringify({model:S.settings.model||'claude-sonnet-5-5',max_tokens:max||900,messages:[{role:'user',content}]})});
+  const j=await r.json(); if(!r.ok) throw new Error((j.error&&j.error.message)||('HTTP '+r.status));
+  return (j.content||[]).filter(c=>c.type==='text').map(c=>c.text).join('\n').trim();
+}
+function contextText(){
+  const c=[]; const now=new Date(); c.push('Agora: '+now.toLocaleString('pt-BR'));
+  if(S.pos){ c.push('Posição GPS: '+S.pos.lat.toFixed(5)+', '+S.pos.lon.toFixed(5)+' (±'+Math.round(S.pos.acc)+' m)'+(cityOf(S.pos)?' em '+cityOf(S.pos):'')); const nb=nearby(400).slice(0,6); if(nb.length) c.push('Pontos da base perto: '+nb.map(x=>x.p.nome+' ('+Math.round(x.d)+' m, '+card(x.b)+')').join('; ')); const n0=nb[0]; if(n0&&n0.d<80) c.push('Provavelmente em: '+n0.p.nome+'. Resumo: '+n0.p.narracao); }
+  if(S.plan){ const d=dayKey(Date.now()); const it=S.plan.itens.filter(i=>i.dia===d).map(i=>i.hora+' '+i.titulo+' ['+i.status+']').join('; '); if(it) c.push('Roteiro de hoje: '+it); }
+  if(S.last) c.push('Último ponto narrado: '+S.last.nome);
+  return c.join('\n');
+}
+/* ---------- PERGUNTE AO GUIA (voz ou texto) ---------- */
+function listen(){ return new Promise((res,rej)=>{ const SR=window.SpeechRecognition||window.webkitSpeechRecognition; if(!SR) return rej(new Error('sem reconhecimento de voz')); const r=new SR(); r.lang='pt-BR'; r.interimResults=false; r.maxAlternatives=1; let done=false; r.onresult=e=>{ done=true; res(e.results[0][0].transcript); }; r.onerror=e=>{ if(!done) rej(new Error(e.error)); }; r.onend=()=>{ if(!done) rej(new Error('nada ouvido')); }; try{ speechSynthesis.cancel(); }catch(e){} r.start(); }); }
+async function askGuide(){
+  if(!S.apiKey){ toast('Cole a chave da API em Ajustes.'); return; }
+  if(!S.pos) startGeo();
+  const b=$('#btnAsk'); let q=null;
+  b.textContent='🎤 Ouvindo… fale'; b.disabled=true;
+  try{ q=await listen(); }catch(e){ b.disabled=false; q=window.prompt('Não ouvi. Digite a pergunta:',''); }
+  if(!q||!q.trim()){ b.textContent='🎤 Pergunte ao guia'; b.disabled=false; return; }
+  b.textContent='Pensando…'; b.disabled=true; $('#now').innerHTML='<div class="eyebrow">Pergunta</div><h2>'+esc(q)+'</h2><p class="meta">consultando…</p>';
+  try{
+    const prompt='Você é um guia turístico culto e objetivo, em português do Brasil, acompanhando um viajante sozinho. Responda à pergunta dele em texto corrido para ser lido em voz alta, 120 a 250 palavras, sem listas nem títulos. Use o contexto (posição, pontos próximos, roteiro). Se for pedido de lugar (comer, beber, ver), dê 2 ou 3 opções concretas com direção e distância aproximada a pé.\nContexto:\n'+contextText()+'\n\nPergunta: '+q;
+    const a=await askClaude(prompt,700);
+    $('#now').innerHTML='<div class="eyebrow">Pergunta · '+hm(Date.now())+'</div><h2>'+esc(q)+'</h2><p>'+esc(a)+'</p>'; say(a);
+    S.qa.push({t:Date.now(),q,a,lat:S.pos?+S.pos.lat.toFixed(5):null,lon:S.pos?+S.pos.lon.toFixed(5):null}); store('guia.qa',S.qa);
+  }catch(e){ toast('IA: '+e.message); $('#now').innerHTML+='<p class="meta">erro: '+esc(e.message)+'</p>'; }
+  b.textContent='🎤 Pergunte ao guia'; b.disabled=false;
+}
+$('#btnAsk').onclick=askGuide;
+/* ---------- RESUMO DO DIA (IA) ---------- */
+async function daySummary(){
+  if(!S.apiKey){ toast('Cole a chave da API em Ajustes.'); return; }
+  const d=S.day||dayKey(Date.now()); const b=$('#btnSummary'); b.disabled=true; b.textContent='Escrevendo…';
+  const ent=S.diary.filter(e=>dayKey(e.start)===d).sort((a,b)=>a.start-b.start).map(e=>hm(e.start)+'–'+hm(e.end)+' '+(TYPES[e.type]||e.type)+': '+(e.place||'')+(e.note?' — '+e.note:'')).join('\n');
+  const ph=S.photos.filter(p=>dayKey(p.t)===d).map(p=>hm(p.t)+' foto: '+(p.place||'')+(p.ai?' — '+p.ai.slice(0,300):'')+(p.note?' — nota: '+p.note:'')).join('\n');
+  const pl=S.plan?S.plan.itens.filter(i=>i.dia===d).map(i=>i.hora+' '+i.titulo+' ['+i.status+']').join('\n'):'';
+  const qa=S.qa.filter(x=>dayKey(x.t)===d).map(x=>hm(x.t)+' perguntou: '+x.q).join('\n');
+  const tr=S.track.filter(t=>dayKey(t.t)===d); let km=0; for(let i=1;i<tr.length;i++) km+=dist(tr[i-1],tr[i]);
+  const narr=[...S.done.entries()].filter(([id,t])=>dayKey(t)===d).map(([id])=>(S.pois.find(p=>p.id===id)||{}).nome).filter(Boolean).join(', ');
+  const prompt='Escreva, em português do Brasil, na primeira pessoa, o registro de diário de viagem deste dia ('+dayLabel(d)+'), 250 a 400 palavras, tom pessoal e vivo, sem listas, sem inventar fatos: use só o que está abaixo (o que não consta, não aconteceu ou é desconhecido). Termine com uma frase do que ficou pendente para outro dia, se houver.\n\nRoteiro planejado e status:\n'+pl+'\n\nParadas registradas:\n'+(ent||'(nenhuma)')+'\n\nFotos:\n'+(ph||'(nenhuma)')+'\n\nPontos narrados pelo guia: '+(narr||'(nenhum)')+'\nDistância andada: '+(km/1000).toFixed(1)+' km\n'+(qa?'Perguntas ao guia:\n'+qa:'');
+  try{ const a=await askClaude(prompt,1200); S.summaries[d]=a; store('guia.summaries',S.summaries); renderDiary(); toast('Resumo pronto.'); }catch(e){ toast('IA: '+e.message); }
+  b.disabled=false; b.textContent='✍️ Resumo do dia (IA)';
+}
+$('#btnSummary').onclick=daySummary;
+
 /* ---------- FOTOS + IA ---------- */
 async function takePhoto(file){
   if(!file) return;
@@ -394,18 +449,18 @@ async function takePhoto(file){
   S.day=dayKey(t); $$('nav [role=tab]').find(b=>b.dataset.tab==='diario').click();
   if(S.apiKey&&navigator.onLine) identifyPhoto(ph);
 }
-async function identifyPhoto(ph){
+async function identifyPhoto(ph,mode){
   if(!S.apiKey){ toast('Cole a chave da API Claude em Ajustes para identificar fotos.'); return; }
   if(!navigator.onLine){ toast('Sem internet agora; tente depois.'); return; }
   const btn=document.querySelector('[data-ai="'+ph.id+'"]'); if(btn){ btn.disabled=true; btn.textContent='Analisando…'; }
   const ctx=[]; if(ph.lat!=null) ctx.push('Coordenadas GPS: '+ph.lat+', '+ph.lon+(ph.city?' ('+ph.city+')':''));
   const nb=(ph.lat!=null)?nearby(250,{lat:ph.lat,lon:ph.lon}).slice(0,5):[]; if(nb.length) ctx.push('Pontos da base próximos: '+nb.map(x=>x.p.nome+' ('+Math.round(x.d)+' m)').join('; '));
   if(S.plan){ const d=dayKey(ph.t); const it=S.plan.itens.filter(i=>i.dia===d).map(i=>i.hora+' '+i.titulo).join('; '); if(it) ctx.push('Roteiro do dia: '+it); }
-  const prompt='Você é um guia turístico culto falando em português do Brasil. Identifique o que aparece nesta foto (monumento, prédio, obra, prato, rua, paisagem) e explique em até 150 palavras, em texto corrido para ser lido em voz alta: o que é, história essencial, um detalhe para reparar e uma curiosidade. Se não tiver certeza, diga a hipótese mais provável e o porquê. Contexto: '+(ctx.join('. ')||'sem GPS')+'.';
+  const prompt=mode==='trad'?('Leia todo o texto desta foto (placa, cardápio, letreiro, folheto). Em português do Brasil, texto corrido para voz: primeiro traduza o conteúdo de forma fiel e organizada; se for cardápio, explique os pratos e sugira 2 opções típicas. Sem listas com símbolos. Contexto: '+(ctx.join('. ')||'')):('Você é um guia turístico culto falando em português do Brasil. Identifique o que aparece nesta foto (monumento, prédio, obra, prato, rua, paisagem) e explique em 180 a 280 palavras, em texto corrido para ser lido em voz alta: o que é, história essencial, arquitetura ou contexto, um detalhe para reparar agora e uma curiosidade. Se não tiver certeza, diga a hipótese mais provável e o porquê. Contexto: '+(ctx.join('. ')||'sem GPS')+'.');
   const b64=ph.data.split(',')[1];
   try{
     const r=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'content-type':'application/json','x-api-key':S.apiKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
-      body:JSON.stringify({model:S.settings.model||'claude-sonnet-5-5',max_tokens:600,messages:[{role:'user',content:[{type:'image',source:{type:'base64',media_type:'image/jpeg',data:b64}},{type:'text',text:prompt}]}]})});
+      body:JSON.stringify({model:S.settings.model||'claude-sonnet-5-5',max_tokens:900,messages:[{role:'user',content:[{type:'image',source:{type:'base64',media_type:'image/jpeg',data:b64}},{type:'text',text:prompt}]}]})});
     const j=await r.json();
     if(!r.ok){ throw new Error((j.error&&j.error.message)||('HTTP '+r.status)); }
     const text=(j.content||[]).filter(c=>c.type==='text').map(c=>c.text).join('\n').trim();
@@ -435,7 +490,11 @@ function renderDiary(){
   const box=$('#diary');
   const city=(items.find(x=>x.k==='e')||{e:{}}).e.city||'';
   if(!items.length){ box.innerHTML='<div class="eyebrow">'+dayLabel(S.day)+'</div><p>Nenhum registro ainda. As paradas de mais de '+S.settings.stay+' min entram sozinhas; o botão abaixo registra agora.</p>'; return; }
-  box.innerHTML='<div class="eyebrow">'+dayLabel(S.day)+' · '+items.length+' itens'+(city?' · '+city:'')+'</div>'+items.map(x=>{
+  S.qa.filter(x=>dayKey(x.t)===S.day).forEach(x=>items.push({k:'q',t:x.t,x}));
+  items.sort((a,b)=>a.t-b.t);
+  const sm=S.summaries[S.day]?'<div class="entry"><div class="eyebrow">Resumo do dia (IA)</div><div class="det">'+esc(S.summaries[S.day])+'</div><div class="chips"><button class="chip" id="btnSumSay">Ouvir</button></div></div>':'';
+  box.innerHTML='<div class="eyebrow">'+dayLabel(S.day)+' · '+items.length+' itens'+(city?' · '+city:'')+'</div>'+sm+items.map(x=>{
+    if(x.k==='q'){ return '<div class="entry"><div class="top"><div class="place">🎤 '+esc(x.x.q)+'</div><div class="time">'+hm(x.t)+'</div></div><div class="det">'+esc(x.x.a)+'</div></div>'; }
     if(x.k==='p'){ const i=x.i; const linked=i.entryId?S.diary.find(e=>e.id===i.entryId):null;
       return '<div class="entry plan '+i.status+'" data-plan="'+i.id+'"><div class="top"><div class="place">'+(i.status==='feito'?'✓ ':i.status==='pulado'?'— ':'◻ ')+esc(i.titulo)+'</div><div class="time">'+esc(i.hora)+' · '+esc(TYPES[i.tipo]||i.tipo)+(i.status==='feito'&&i.auto?' · auto':'')+'</div></div>'+
         (i.detalhes?'<div class="det">'+esc(i.detalhes)+'</div>':'')+(linked?'<div class="meta">registrado '+hm(linked.start)+'–'+hm(linked.end)+(linked.place?' · '+esc(linked.place):'')+'</div>':'')+
@@ -443,13 +502,14 @@ function renderDiary(){
         '<div class="chips" data-actions>'+(i.status!=='feito'?'<button class="chip ok" data-act="feito">Feito</button>':'<button class="chip" data-act="reabrir">Reabrir</button>')+'<button class="chip" data-act="edit">Editar</button>'+(i.status==='planejado'?'<button class="chip" data-act="pular">Pular</button>':'')+(isFinite(i.lat)?'<button class="chip" data-act="ir">Como chegar</button>':'')+'<button class="chip" data-act="ouvir">Ouvir</button></div></div>'; }
     if(x.k==='f'){ const p=x.p;
       return '<div class="entry" data-photo="'+p.id+'"><div class="top"><div class="place">📷 '+esc(p.place||'Foto')+'</div><div class="time">'+hm(p.t)+'</div></div><img src="'+p.data+'" alt="foto" loading="lazy">'+(p.ai?'<div class="ai">'+esc(p.ai)+'</div>':'')+
-        '<textarea placeholder="Nota sobre a foto…" data-fnote>'+esc(p.note)+'</textarea><div class="chips">'+(p.ai?'<button class="chip" data-act="ouvirai">Ouvir</button>':'')+'<button class="chip ok" data-ai="'+p.id+'">'+(p.ai?'Analisar de novo':'O que é isto?')+'</button><button class="chip" data-act="frename">Renomear</button><button class="chip" data-act="fdel">Apagar</button></div></div>'; }
+        '<textarea placeholder="Nota sobre a foto…" data-fnote>'+esc(p.note)+'</textarea><div class="chips">'+(p.ai?'<button class="chip" data-act="ouvirai">Ouvir</button>':'')+'<button class="chip ok" data-ai="'+p.id+'">'+(p.ai?'Analisar de novo':'O que é isto?')+'</button><button class="chip" data-trad="'+p.id+'">Ler/traduzir texto</button><button class="chip" data-act="frename">Renomear</button><button class="chip" data-act="fdel">Apagar</button></div></div>'; }
     const e=x.e; const open=S.open&&S.open.id===e.id;
     return '<div class="entry" data-id="'+e.id+'"><div class="top"><div class="place">'+esc(e.place||'…')+'</div><div class="time">'+hm(e.start)+'–'+(open?'agora':hm(e.end))+' · '+fmtDur((open?Date.now():e.end)-e.start)+(e.auto?' · auto':'')+'</div></div>'+
       '<div class="chips">'+Object.entries(TYPES).map(([k,v])=>'<button class="chip" data-type="'+k+'" aria-pressed="'+(e.type===k)+'">'+v+'</button>').join('')+'</div>'+
       '<textarea placeholder="Nota: o que comeu, com quem, o que valeu…" data-note>'+esc(e.note)+'</textarea>'+
       '<div class="chips"><button class="chip" data-act="rename">Renomear lugar</button><button class="chip" data-act="poi">Ouvir sobre o lugar</button><button class="chip" data-act="del">Apagar</button></div></div>';
   }).join('');
+  const bs=$('#btnSumSay'); if(bs) bs.onclick=()=>say(S.summaries[S.day]);
   // registros
   box.querySelectorAll('.entry[data-id]').forEach(el=>{
     const e=S.diary.find(x=>x.id===el.dataset.id);
@@ -464,6 +524,7 @@ function renderDiary(){
     const p=S.photos.find(x=>x.id===el.dataset.photo);
     const ta=el.querySelector('[data-fnote]'); ta.oninput=()=>{ p.note=ta.value; DB.put(p).catch(()=>{}); };
     el.querySelector('[data-ai]').onclick=()=>identifyPhoto(p);
+    el.querySelector('[data-trad]').onclick=()=>identifyPhoto(p,'trad');
     const oa=el.querySelector('[data-act=ouvirai]'); if(oa) oa.onclick=()=>say(p.ai);
     el.querySelector('[data-act=frename]').onclick=()=>{ const n=window.prompt('Lugar da foto', p.place||''); if(n!=null){ p.place=n.trim(); DB.put(p).then(renderDiary); } };
     el.querySelector('[data-act=fdel]').onclick=()=>{ if(el.dataset.confirm){ DB.del(p.id).then(()=>{ S.photos=S.photos.filter(x=>x.id!==p.id); renderDiary(); }); } else { el.dataset.confirm='1'; el.querySelector('[data-act=fdel]').textContent='Confirmar apagar'; } };
@@ -490,7 +551,8 @@ function diaryMarkdown(day){
     const items=[]; S.diary.filter(e=>dayKey(e.start)===d).forEach(e=>items.push({t:e.start,s:'- '+hm(e.start)+'–'+hm(e.end)+' ('+fmtDur(e.end-e.start)+') · **'+(TYPES[e.type]||e.type)+'** · '+(e.place||'')+(e.note?' — '+e.note.replace(/\n/g,' '):'')+' · [mapa](https://www.google.com/maps/search/?api=1&query='+e.lat+','+e.lon+')'}));
     S.photos.filter(p=>dayKey(p.t)===d).forEach(p=>items.push({t:p.t,s:'- '+hm(p.t)+' · 📷 '+(p.place||'foto')+(p.note?' — '+p.note:'')+(p.ai?'\n  > '+p.ai.replace(/\n/g,' '):'')}));
     if(S.plan) S.plan.itens.filter(i=>i.dia===d&&!i.entryId).forEach(i=>items.push({t:planTime(i),s:'- '+i.hora+' · '+(i.status==='feito'?'✓':i.status==='pulado'?'(pulado)':'◻')+' '+i.titulo+(i.detalhes?' — '+i.detalhes.replace(/\n/g,' '):'')}));
-    if(!items.length) return; md+='\n## '+dayLabel(d)+'\n'+items.sort((a,b)=>a.t-b.t).map(x=>x.s).join('\n')+'\n';
+    S.qa.filter(x=>dayKey(x.t)===d).forEach(x=>items.push({t:x.t,s:'- '+hm(x.t)+' · 🎤 '+x.q+'\n  > '+x.a.replace(/\n/g,' ')}));
+    if(!items.length&&!S.summaries[d]) return; md+='\n## '+dayLabel(d)+'\n'+(S.summaries[d]?S.summaries[d]+'\n\n':'')+items.sort((a,b)=>a.t-b.t).map(x=>x.s).join('\n')+'\n';
   });
   return md;
 }
@@ -502,7 +564,8 @@ function playbookHTML(){
     S.diary.filter(e=>dayKey(e.start)===d).forEach(e=>items.push({t:e.start,h:'<div class="it"><div class="t">'+hm(e.start)+'–'+hm(e.end)+' · '+fmtDur(e.end-e.start)+' · '+(TYPES[e.type]||e.type)+'</div><b>'+esc2(e.place||'')+'</b>'+(e.note?'<div>'+esc2(e.note)+'</div>':'')+'</div>'}));
     S.photos.filter(p=>dayKey(p.t)===d).forEach(p=>items.push({t:p.t,h:'<div class="it"><div class="t">'+hm(p.t)+' · foto</div><b>'+esc2(p.place||'')+'</b><img src="'+p.data+'">'+(p.ai?'<div class="ai">'+esc2(p.ai)+'</div>':'')+(p.note?'<div>'+esc2(p.note)+'</div>':'')+'</div>'}));
     if(S.plan) S.plan.itens.filter(i=>i.dia===d).forEach(i=>items.push({t:planTime(i),h:'<div class="it plan '+i.status+'"><div class="t">'+esc2(i.hora)+' · '+(TYPES[i.tipo]||i.tipo)+' · '+(i.status==='feito'?'feito':i.status==='pulado'?'pulado':'planejado')+'</div><b>'+esc2(i.titulo)+'</b>'+(i.detalhes?'<div class="det">'+esc2(i.detalhes)+'</div>':'')+'</div>'}));
-    if(!items.length) return; h+='<h2>'+dayLabel(d)+'</h2>'+items.sort((a,b)=>a.t-b.t).map(x=>x.h).join('');
+    S.qa.filter(x=>dayKey(x.t)===d).forEach(x=>items.push({t:x.t,h:'<div class="it"><div class="t">'+hm(x.t)+' · pergunta ao guia</div><b>'+esc2(x.q)+'</b><div class="ai">'+esc2(x.a)+'</div></div>'}));
+    if(!items.length&&!S.summaries[d]) return; h+='<h2>'+dayLabel(d)+'</h2>'+(S.summaries[d]?'<div class="ai" style="font-size:16px;white-space:pre-line">'+esc2(S.summaries[d])+'</div>':'')+items.sort((a,b)=>a.t-b.t).map(x=>x.h).join('');
   });
   return h+'</body></html>';
 }
@@ -687,11 +750,11 @@ $('#btnDay').onclick=()=>{
 /* ---------- ajustes ---------- */
 function bindSettings(){
   const s=S.settings;
-  $('#setAuto').checked=s.auto; $('#setRaio').value=s.raio; $('#setRate').value=s.rate; $('#setRep').value=s.rep; $('#setStay').value=s.stay; $('#setDiaryAuto').checked=s.diaryAuto; $('#setGeocode').checked=s.geocode; $('#setModel').value=s.model||''; $('#setKey').value=S.apiKey;
+  $('#setAuto').checked=s.auto; $('#setLong').checked=s.long!==false; $('#setRaio').value=s.raio; $('#setRate').value=s.rate; $('#setRep').value=s.rep; $('#setStay').value=s.stay; $('#setDiaryAuto').checked=s.diaryAuto; $('#setGeocode').checked=s.geocode; $('#setModel').value=s.model||''; $('#setKey').value=S.apiKey;
   const lbl=()=>{ $('#lblRaio').textContent='+'+s.raio+' m'; $('#lblRate').textContent=s.rate.toFixed(1)+'×'; $('#lblRep').textContent=s.rep+' h'; $('#lblStay').textContent=s.stay+' min'; };
   lbl();
-  const upd=()=>{ s.auto=$('#setAuto').checked; s.raio=+$('#setRaio').value; s.rate=+$('#setRate').value; s.rep=+$('#setRep').value; s.stay=+$('#setStay').value; s.diaryAuto=$('#setDiaryAuto').checked; s.geocode=$('#setGeocode').checked; s.voice=$('#setVoice').value; s.model=$('#setModel').value.trim()||'claude-sonnet-5-5'; store('guia.settings',s); lbl(); pickVoice(); };
-  ['#setAuto','#setRaio','#setRate','#setRep','#setStay','#setDiaryAuto','#setGeocode','#setVoice','#setModel'].forEach(id=>$(id).addEventListener('input',upd));
+  const upd=()=>{ s.auto=$('#setAuto').checked; s.long=$('#setLong').checked; s.raio=+$('#setRaio').value; s.rate=+$('#setRate').value; s.rep=+$('#setRep').value; s.stay=+$('#setStay').value; s.diaryAuto=$('#setDiaryAuto').checked; s.geocode=$('#setGeocode').checked; s.voice=$('#setVoice').value; s.model=$('#setModel').value.trim()||'claude-sonnet-5-5'; store('guia.settings',s); lbl(); pickVoice(); };
+  ['#setAuto','#setLong','#setRaio','#setRate','#setRep','#setStay','#setDiaryAuto','#setGeocode','#setVoice','#setModel'].forEach(id=>$(id).addEventListener('input',upd));
   $('#setKey').addEventListener('input',()=>{ S.apiKey=$('#setKey').value.trim(); try{ localStorage.setItem('guia.apikey',S.apiKey); }catch(e){} });
   $('#btnTestKey').onclick=async()=>{ if(!S.apiKey){ toast('Cole a chave primeiro.'); return; } const b=$('#btnTestKey'); b.disabled=true; b.textContent='Testando…';
     try{ const r=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'content-type':'application/json','x-api-key':S.apiKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},body:JSON.stringify({model:S.settings.model||'claude-sonnet-5-5',max_tokens:20,messages:[{role:'user',content:'Responda só: OK'}]})});
@@ -699,9 +762,9 @@ function bindSettings(){
     catch(e){ toast('Falhou: '+e.message); } b.disabled=false; b.textContent='Testar chave da API'; };
   $('#btnTestVoice').onclick=()=>say('Teste de voz. Você está ouvindo o Guia de Bolso na velocidade '+s.rate.toFixed(1)+'.');
   $('#btnResetDone').onclick=()=>{ S.done.clear(); saveDone(); refreshCounts(); toast('Lista de narrados zerada.'); };
-  $('#btnBackup').onclick=async()=>{ const data={version:VERSION,exported:new Date().toISOString(),diary:S.diary,track:S.track,plan:S.plan,photos:S.photos}; shareOrDownload('guia-backup-'+dayKey(Date.now())+'.json',JSON.stringify(data),'application/json','Backup do Guia'); };
+  $('#btnBackup').onclick=async()=>{ const data={version:VERSION,exported:new Date().toISOString(),diary:S.diary,track:S.track,plan:S.plan,photos:S.photos,qa:S.qa,summaries:S.summaries}; shareOrDownload('guia-backup-'+dayKey(Date.now())+'.json',JSON.stringify(data),'application/json','Backup do Guia'); };
   $('#btnRestore').onclick=()=>$('#fileRestore').click();
-  $('#fileRestore').onchange=ev=>{ const f=ev.target.files[0]; ev.target.value=''; if(!f) return; f.text().then(async t=>{ try{ const d=JSON.parse(t); let n=0; if(Array.isArray(d.diary)){ const ids=new Set(S.diary.map(e=>e.id)); d.diary.forEach(e=>{ if(!ids.has(e.id)){ S.diary.push(e); n++; } }); saveDiary(); } if(d.plan&&!S.plan){ S.plan=normalizePlan(d.plan); savePlan(); } if(Array.isArray(d.photos)){ const ids=new Set(S.photos.map(p=>p.id)); for(const p of d.photos){ if(!ids.has(p.id)){ await DB.put(p); S.photos.push(p); n++; } } } renderDiary(); toast('Backup restaurado: '+n+' itens novos.'); }catch(e){ toast('Arquivo inválido.'); } }); };
+  $('#fileRestore').onchange=ev=>{ const f=ev.target.files[0]; ev.target.value=''; if(!f) return; f.text().then(async t=>{ try{ const d=JSON.parse(t); let n=0; if(Array.isArray(d.diary)){ const ids=new Set(S.diary.map(e=>e.id)); d.diary.forEach(e=>{ if(!ids.has(e.id)){ S.diary.push(e); n++; } }); saveDiary(); } if(d.plan&&!S.plan){ S.plan=normalizePlan(d.plan); savePlan(); } if(Array.isArray(d.qa)){ const ts=new Set(S.qa.map(x=>x.t)); d.qa.forEach(x=>{ if(!ts.has(x.t)) S.qa.push(x); }); store('guia.qa',S.qa); } if(d.summaries){ Object.assign(S.summaries,d.summaries); store('guia.summaries',S.summaries); } if(Array.isArray(d.photos)){ const ids=new Set(S.photos.map(p=>p.id)); for(const p of d.photos){ if(!ids.has(p.id)){ await DB.put(p); S.photos.push(p); n++; } } } renderDiary(); toast('Backup restaurado: '+n+' itens novos.'); }catch(e){ toast('Arquivo inválido.'); } }); };
   $('#btnPlan').onclick=()=>$('#filePlan').click();
   $('#filePlan').onchange=ev=>{ const f=ev.target.files[0]; ev.target.value=''; if(!f) return; f.text().then(t=>{ try{ const d=JSON.parse(t); if(!Array.isArray(d.itens)) throw 0; const old=S.plan; S.plan=normalizePlan(d); if(old){ old.itens.forEach(o=>{ const m=S.plan.itens.find(i=>i.id===o.id); if(m){ m.status=o.status; m.entryId=o.entryId; m.auto=!!o.auto; } }); } savePlan(); renderDiary(); toast('Roteiro importado: '+S.plan.itens.length+' itens, '+S.plan.hoteis.length+' hotéis.'); }catch(e){ toast('Arquivo de roteiro inválido.'); } }); };
   $('#btnPlanUndoAuto').onclick=()=>{ if(!S.plan) return; let n=0; S.plan.itens.forEach(i=>{ if(i.status==='feito'&&i.auto){ i.status='planejado'; i.auto=false; if(i.entryId){ const e=S.diary.find(x=>x.id===i.entryId); if(e) e.planId=null; i.entryId=null; } n++; } }); savePlan(); saveDiary(); renderDiary(); toast(n+' itens reabertos.'); };

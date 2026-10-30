@@ -1,5 +1,5 @@
 // Guia de Bolso — service worker: app funciona offline (narração é feita pela voz do próprio celular)
-const CACHE = 'guia-v2-8';
+const CACHE = 'guia-v2-9';
 const ASSETS = ['./', './index.html', './pois.json', './manifest.json', './icon.png', './icon-maskable.png'];
 const EXTRA = ['https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css', 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js']; // mapa: melhor esforço
 
